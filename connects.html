@@ -1,0 +1,1515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Connects</title>
+
+  <!-- Firebase SDK (compat) -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-storage-compat.js"></script>
+
+  <!-- React + Babel -->
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; -webkit-tap-highlight-color: transparent; margin: 0; padding: 0; }
+    html, body { height: 100%; background: #08080F; }
+    body { font-family: 'Inter', -apple-system, sans-serif; color: #fff; }
+    #root { display: flex; justify-content: center; min-height: 100vh; background: #0d0d0d; }
+
+    .app-shell {
+      width: 100%; max-width: 430px; min-height: 100vh;
+      background: #08080F; position: relative;
+      display: flex; flex-direction: column; overflow: hidden;
+      box-shadow: 0 0 80px rgba(0,0,0,0.8);
+    }
+    .screen-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; padding-bottom: 88px; }
+    ::-webkit-scrollbar { display: none; }
+    * { scrollbar-width: none; }
+
+    @keyframes livePulse { 0%,100%{opacity:1;transform:scale(1);}50%{opacity:.4;transform:scale(0.8);} }
+    @keyframes fadeUp { from{opacity:0;transform:translateY(16px);}to{opacity:1;transform:translateY(0);} }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes toastIn { from{opacity:0;transform:translateY(20px);}to{opacity:1;transform:translateY(0);} }
+    @keyframes toastOut { from{opacity:1;}to{opacity:0;} }
+
+    .live-dot { width:7px;height:7px;border-radius:50%;background:#10B981;animation:livePulse 1.6s ease-in-out infinite;flex-shrink:0; }
+    .animate-in { animation: fadeUp 0.35s ease-out forwards; }
+
+    button { cursor:pointer;border:none;outline:none;font-family:inherit;transition:transform 0.12s,opacity 0.12s; }
+    button:active:not(:disabled) { transform:scale(0.96); }
+    input, textarea, select { font-family:inherit;outline:none;resize:none; }
+    input::placeholder, textarea::placeholder { color:rgba(255,255,255,0.3); }
+
+    .card-press { transition:transform 0.15s,background 0.15s; cursor:pointer; }
+    .card-press:active { transform:scale(0.985); }
+
+    .gradient-text { background:linear-gradient(135deg,#A78BFA,#EC4899);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text; }
+    .btn-primary { background:linear-gradient(135deg,#7C3AED,#C026D3);color:#fff;font-weight:700;border:none;box-shadow:0 4px 20px rgba(124,58,237,0.4); }
+    .btn-primary:active { box-shadow:0 2px 10px rgba(124,58,237,0.3); }
+
+    .input-field {
+      width:100%;padding:14px 16px;border-radius:14px;font-size:15px;font-weight:500;
+      background:rgba(255,255,255,0.06);border:1.5px solid rgba(255,255,255,0.1);
+      color:#fff;transition:border-color 0.2s;
+    }
+    .input-field:focus { border-color:rgba(139,92,246,0.6); }
+    .input-label { display:block;font-size:12px;font-weight:700;color:rgba(255,255,255,0.45);margin-bottom:7px;letter-spacing:0.5px;text-transform:uppercase; }
+
+    input[type="date"]::-webkit-calendar-picker-indicator,
+    input[type="time"]::-webkit-calendar-picker-indicator { filter:invert(1);opacity:0.4; }
+    input[type="date"], input[type="time"] { color-scheme:dark; }
+
+    /* OTP input digits */
+    .otp-input { width:48px;height:56px;text-align:center;font-size:24px;font-weight:800;border-radius:14px; }
+
+    /* Toast */
+    .toast {
+      position:fixed;bottom:100px;left:50%;transform:translateX(-50%);
+      background:rgba(30,30,40,0.95);backdrop-filter:blur(20px);
+      border:1px solid rgba(255,255,255,0.12);border-radius:14px;
+      padding:12px 20px;font-size:14px;font-weight:600;
+      z-index:9999;white-space:nowrap;animation:toastIn 0.3s ease-out;
+    }
+  </style>
+</head>
+<body>
+
+<!-- Required for Firebase Phone Auth reCAPTCHA -->
+<div id="recaptcha-container" style="position:fixed;bottom:0;left:0;z-index:9999;"></div>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useCallback } = React;
+
+/* ═══════════════════════════════════════════════════════════
+   🔥 FIREBASE CONFIGURATION
+   ───────────────────────────────────────────────────────────
+   1. Go to https://console.firebase.google.com
+   2. Create a project → Add a web app
+   3. Copy the config object and paste it below
+   4. In Firebase Console, enable:
+      • Authentication → Phone (turn on)
+      • Firestore Database → Create in production mode
+      • Storage → Get started
+   ═══════════════════════════════════════════════════════════ */
+const FIREBASE_CONFIG = {
+  apiKey:            "AIzaSyC6-PmkYxy2PqOhufuNU9KEDVXXIKcRpxw",
+  authDomain:        "connects-ca829.firebaseapp.com",
+  projectId:         "connects-ca829",
+  storageBucket:     "connects-ca829.firebasestorage.app",
+  messagingSenderId: "388133096891",
+  appId:             "1:388133096891:web:4b5d084dc9f18056c0c89e",
+};
+
+const IS_CONFIGURED = FIREBASE_CONFIG.apiKey !== "REPLACE_WITH_YOUR_API_KEY";
+
+/* ── Firebase services ── */
+let auth, db, storage;
+if (IS_CONFIGURED) {
+  firebase.initializeApp(FIREBASE_CONFIG);
+  auth    = firebase.auth();
+  db      = firebase.firestore();
+  storage = firebase.storage();
+}
+
+/* ═══════════════════════════════════════════════════════════
+   FIREBASE SERVICE HELPERS
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── Auth ── */
+const setupRecaptcha = async () => {
+  if (!window._recaptchaVerifier) {
+    window._recaptchaVerifier = new firebase.auth.RecaptchaVerifier('recaptcha-container', {
+      size: 'invisible',
+      callback: () => {},
+    });
+  }
+  // Render (no-op if already rendered) then reset so it's fresh for next use
+  try {
+    const widgetId = await window._recaptchaVerifier.render();
+    if (typeof grecaptcha !== 'undefined') grecaptcha.reset(widgetId);
+  } catch(e) { /* already rendered — proceed */ }
+};
+
+const sendOTP = async (phone) => {
+  await setupRecaptcha();
+  const result = await auth.signInWithPhoneNumber(phone, window._recaptchaVerifier);
+  window._confirmationResult = result;
+};
+
+const verifyOTP = async (code) => {
+  const result = await window._confirmationResult.confirm(code);
+  return result.user;
+};
+
+/* ── File Upload ── */
+const uploadFile = async (path, file, onProgress) => {
+  const ref = storage.ref(path);
+  const task = ref.put(file);
+  if (onProgress) task.on('state_changed', snap => onProgress(snap.bytesTransferred / snap.totalBytes * 100));
+  await task;
+  return ref.getDownloadURL();
+};
+
+/* ── Users ── */
+const getUser = async (uid) => {
+  const doc = await db.collection('users').doc(uid).get();
+  return doc.exists ? { id: doc.id, ...doc.data() } : null;
+};
+
+const saveUser = async (uid, data) => {
+  await db.collection('users').doc(uid).set(data, { merge: true });
+};
+
+const watchUser = (uid, cb) =>
+  db.collection('users').doc(uid).onSnapshot(doc =>
+    cb(doc.exists ? { id: doc.id, ...doc.data() } : null)
+  );
+
+/* ── Events ── */
+const getEvents = async () => {
+  const snap = await db.collection('events').orderBy('createdAt', 'desc').get();
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+};
+
+const createEvent = async (data) => {
+  const ref = await db.collection('events').add({ ...data, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+  return ref.id;
+};
+
+const updateEvent = async (id, data) => db.collection('events').doc(id).update(data);
+
+const checkIn = async (eventId, uid) => {
+  await db.collection('events').doc(eventId).collection('attendees').doc(uid).set({
+    checkedIn: true, checkedInAt: firebase.firestore.FieldValue.serverTimestamp(),
+  });
+  await db.collection('events').doc(eventId).update({ checkedInCount: firebase.firestore.FieldValue.increment(1) });
+};
+
+const getAttendees = async (eventId) => {
+  const snap = await db.collection('events').doc(eventId).collection('attendees').get();
+  const uids = snap.docs.map(d => d.id);
+  if (!uids.length) return [];
+  const profiles = await Promise.all(uids.map(getUser));
+  return profiles.filter(Boolean);
+};
+
+/* ── Feed ── */
+const watchFeed = (eventId, cb) =>
+  db.collection('events').doc(eventId).collection('posts')
+    .orderBy('createdAt', 'desc').limit(30)
+    .onSnapshot(snap => cb(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+
+const addPost = async (eventId, data) => {
+  await db.collection('events').doc(eventId).collection('posts').add({
+    ...data, createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+  });
+};
+
+const toggleLike = async (eventId, postId, uid, liked) => {
+  const ref = db.collection('events').doc(eventId).collection('posts').doc(postId);
+  await ref.update({
+    likes: liked
+      ? firebase.firestore.FieldValue.arrayRemove(uid)
+      : firebase.firestore.FieldValue.arrayUnion(uid),
+  });
+};
+
+/* ── DMs ── */
+const dmId = (a, b) => [a, b].sort().join('__');
+
+const watchDMMessages = (id, cb) =>
+  db.collection('dms').doc(id).collection('messages')
+    .orderBy('createdAt', 'asc').limit(100)
+    .onSnapshot(snap => cb(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+
+const sendMessage = async (id, senderId, text) => {
+  await db.collection('dms').doc(id).collection('messages').add({
+    senderId, text, createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+  });
+  await db.collection('dms').doc(id).set({
+    participants: id.split('__'),
+    lastMessage: text,
+    lastAt: firebase.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+};
+
+const watchUserDMs = (uid, cb) =>
+  db.collection('dms')
+    .where('participants', 'array-contains', uid)
+    .orderBy('lastAt', 'desc').limit(20)
+    .onSnapshot(snap => cb(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+
+/* ═══════════════════════════════════════════════════════════
+   UTILITIES
+   ═══════════════════════════════════════════════════════════ */
+const fmt = n => n >= 1000 ? (n / 1000).toFixed(1).replace('.0', '') + 'K' : String(n || 0);
+const initials = name => name ? name.trim().split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase() : '??';
+const COLORS = ['#8B5CF6','#EC4899','#10B981','#F59E0B','#3B82F6','#EF4444','#14B8A6','#F97316'];
+const colorFor = uid => COLORS[(uid?.charCodeAt(0) || 0) % COLORS.length];
+
+/* ═══════════════════════════════════════════════════════════
+   TOAST
+   ═══════════════════════════════════════════════════════════ */
+const ToastCtx = React.createContext(null);
+const ToastProvider = ({ children }) => {
+  const [toast, setToast] = useState(null);
+  const show = useCallback((msg, type = 'info') => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 3000);
+  }, []);
+  const icons = { info:'ℹ️', success:'✅', error:'❌' };
+  return (
+    <ToastCtx.Provider value={show}>
+      {children}
+      {toast && (
+        <div className="toast" style={{ color: toast.type==='error'?'#FCA5A5':toast.type==='success'?'#6EE7B7':'#fff' }}>
+          {icons[toast.type]} {toast.msg}
+        </div>
+      )}
+    </ToastCtx.Provider>
+  );
+};
+const useToast = () => React.useContext(ToastCtx);
+
+/* ═══════════════════════════════════════════════════════════
+   UI PRIMITIVES
+   ═══════════════════════════════════════════════════════════ */
+const Spinner = ({ size=24 }) => (
+  <div style={{ width:size,height:size,borderRadius:'50%',border:`${size*0.12}px solid rgba(255,255,255,0.1)`,borderTopColor:'#8B5CF6',animation:'spin 0.8s linear infinite' }} />
+);
+
+const Avatar = ({ user, size=40, ring=false, online=false }) => {
+  const bg = ring ? 'linear-gradient(135deg,#A78BFA,#EC4899)' : (user?.photoURL ? 'transparent' : colorFor(user?.id));
+  return (
+    <div style={{ position:'relative',flexShrink:0,width:size,height:size }}>
+      <div style={{ width:size,height:size,borderRadius:'50%',background:bg,display:'flex',alignItems:'center',justifyContent:'center',overflow:'hidden',padding:ring?2.5:0 }}>
+        {ring
+          ? <div style={{ width:'100%',height:'100%',borderRadius:'50%',background:colorFor(user?.id),display:'flex',alignItems:'center',justifyContent:'center',overflow:'hidden' }}>
+              {user?.photoURL ? <img src={user.photoURL} style={{width:'100%',height:'100%',objectFit:'cover'}} /> : <span style={{fontSize:size*0.34,fontWeight:800}}>{initials(user?.name)}</span>}
+            </div>
+          : user?.photoURL
+            ? <img src={user.photoURL} style={{width:'100%',height:'100%',objectFit:'cover'}} />
+            : <span style={{fontSize:size*0.36,fontWeight:800,color:'#fff'}}>{initials(user?.name)}</span>
+        }
+      </div>
+      {online && <div style={{ position:'absolute',bottom:1,right:1,width:size*0.27,height:size*0.27,borderRadius:'50%',background:'#10B981',border:`${Math.max(2,size*0.06)}px solid #08080F` }} />}
+    </div>
+  );
+};
+
+const Chip = ({ label, bg='rgba(139,92,246,0.18)', color='#C4B5FD', onClick }) => (
+  <span onClick={onClick} style={{ padding:'3px 11px',borderRadius:99,fontSize:11,fontWeight:700,background:bg,color,whiteSpace:'nowrap',cursor:onClick?'pointer':'default' }}>{label}</span>
+);
+
+const LiveBadge = () => (
+  <div style={{ display:'flex',alignItems:'center',gap:6,background:'rgba(16,185,129,0.12)',border:'1px solid rgba(16,185,129,0.3)',borderRadius:99,padding:'4px 11px' }}>
+    <div className="live-dot" />
+    <span style={{ fontSize:11,fontWeight:800,color:'#10B981',letterSpacing:0.8 }}>LIVE</span>
+  </div>
+);
+
+const SocialLink = ({ platform, handle }) => {
+  if (!handle) return null;
+  const clean = handle.replace('@','');
+  const url = platform==='instagram' ? `https://instagram.com/${clean}` : `https://tiktok.com/@${clean}`;
+  const icon = platform==='instagram' ? '📸' : '🎵';
+  const color = platform==='instagram' ? '#E1306C' : '#000';
+  const bg = platform==='instagram' ? 'rgba(225,48,108,0.12)' : 'rgba(255,255,255,0.08)';
+  return (
+    <a href={url} target="_blank" rel="noopener noreferrer" style={{ display:'flex',alignItems:'center',gap:7,background:bg,border:`1px solid ${platform==='instagram'?'rgba(225,48,108,0.25)':'rgba(255,255,255,0.1)'}`,borderRadius:99,padding:'7px 14px',textDecoration:'none',color:'#fff',fontSize:13,fontWeight:700 }}>
+      <span>{icon}</span> @{clean}
+    </a>
+  );
+};
+
+/* ═══════════════════════════════════════════════════════════
+   SETUP REQUIRED SCREEN
+   ═══════════════════════════════════════════════════════════ */
+const SetupScreen = () => (
+  <div style={{ minHeight:'100vh',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:28,textAlign:'center',background:'#08080F' }}>
+    <div style={{ fontSize:52,marginBottom:16 }}>🔥</div>
+    <h2 style={{ fontSize:26,fontWeight:900,marginBottom:12 }}>Firebase Setup Required</h2>
+    <p style={{ color:'rgba(255,255,255,0.5)',fontSize:14,lineHeight:1.7,marginBottom:28,maxWidth:320 }}>
+      Open this file in a code editor and replace the <code style={{color:'#A78BFA',background:'rgba(139,92,246,0.15)',padding:'2px 6px',borderRadius:6}}>FIREBASE_CONFIG</code> values at the top with your Firebase project credentials.
+    </p>
+    <div style={{ background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.1)',borderRadius:18,padding:20,textAlign:'left',width:'100%',maxWidth:340 }}>
+      {[
+        ['1', 'Go to', 'console.firebase.google.com'],
+        ['2', 'Create a project', '→ Add a web app'],
+        ['3', 'Enable Phone Auth', 'Authentication → Sign-in method'],
+        ['4', 'Create Firestore DB', 'Firestore Database → Create'],
+        ['5', 'Enable Storage', 'Storage → Get started'],
+        ['6', 'Paste config', 'Replace values at top of file'],
+      ].map(([n, a, b]) => (
+        <div key={n} style={{ display:'flex',gap:12,marginBottom:12,alignItems:'flex-start' }}>
+          <div style={{ width:24,height:24,borderRadius:'50%',background:'linear-gradient(135deg,#7C3AED,#C026D3)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:900,flexShrink:0,marginTop:1 }}>{n}</div>
+          <div><span style={{ fontWeight:700,fontSize:14 }}>{a}</span> <span style={{ color:'rgba(255,255,255,0.45)',fontSize:13 }}>{b}</span></div>
+        </div>
+      ))}
+    </div>
+    <p style={{ marginTop:20,color:'rgba(255,255,255,0.3)',fontSize:12 }}>Then refresh this page and you're live ⚡</p>
+  </div>
+);
+
+/* ═══════════════════════════════════════════════════════════
+   AUTH — PHONE ENTRY
+   ═══════════════════════════════════════════════════════════ */
+const PhoneScreen = ({ onCodeSent }) => {
+  const [phone, setPhone] = useState('');
+  const [loading, setLoading] = useState(false);
+  const toast = useToast();
+
+  const submit = async () => {
+    const cleaned = phone.replace(/\D/g,'');
+    if (cleaned.length < 10) return toast('Enter a valid phone number', 'error');
+    const formatted = '+1' + cleaned.slice(-10);
+    setLoading(true);
+    try {
+      await sendOTP(formatted);
+      onCodeSent(formatted);
+    } catch(e) {
+      toast(e.message || 'Failed to send code', 'error');
+      window._recaptchaVerifier = null;
+    } finally { setLoading(false); }
+  };
+
+  const formatDisplay = (v) => {
+    const d = v.replace(/\D/g,'').slice(0,10);
+    if (d.length <= 3) return d;
+    if (d.length <= 6) return `(${d.slice(0,3)}) ${d.slice(3)}`;
+    return `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`;
+  };
+
+  return (
+    <div style={{ minHeight:'100vh',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:'40px 28px',background:'#08080F',position:'relative',overflow:'hidden' }}>
+      <div style={{ position:'absolute',top:'10%',left:'-10%',width:300,height:300,borderRadius:'50%',background:'radial-gradient(circle,rgba(109,40,217,0.25) 0%,transparent 70%)',filter:'blur(40px)',pointerEvents:'none' }}/>
+      <div style={{ position:'absolute',bottom:'10%',right:'-10%',width:280,height:280,borderRadius:'50%',background:'radial-gradient(circle,rgba(236,72,153,0.2) 0%,transparent 70%)',filter:'blur(40px)',pointerEvents:'none' }}/>
+
+      <div style={{ textAlign:'center',marginBottom:48,zIndex:1 }} className="animate-in">
+        <div style={{ fontSize:52,marginBottom:12,filter:'drop-shadow(0 0 20px rgba(139,92,246,0.6))' }}>⚡</div>
+        <h1 className="gradient-text" style={{ fontSize:46,fontWeight:900,letterSpacing:-2,margin:'0 0 10px' }}>connects</h1>
+        <p style={{ color:'rgba(255,255,255,0.45)',fontSize:16 }}>Find your people at every event</p>
+      </div>
+
+      <div style={{ width:'100%',maxWidth:320,zIndex:1 }}>
+        <label className="input-label">Your phone number</label>
+        <div style={{ display:'flex',gap:10,marginBottom:20 }}>
+          <div style={{ padding:'14px 14px',borderRadius:14,background:'rgba(255,255,255,0.06)',border:'1.5px solid rgba(255,255,255,0.1)',color:'rgba(255,255,255,0.6)',fontSize:15,fontWeight:700,flexShrink:0 }}>🇺🇸 +1</div>
+          <input
+            className="input-field"
+            value={formatDisplay(phone)}
+            onChange={e => setPhone(e.target.value.replace(/\D/g,'').slice(0,10))}
+            onKeyDown={e => e.key==='Enter' && submit()}
+            placeholder="(555) 000-0000"
+            inputMode="numeric"
+            style={{ flex:1 }}
+          />
+        </div>
+        <button
+          onClick={submit} disabled={loading}
+          className="btn-primary"
+          style={{ width:'100%',padding:16,borderRadius:16,fontSize:17,display:'flex',alignItems:'center',justifyContent:'center',gap:10 }}
+        >
+          {loading ? <Spinner size={20} /> : 'Get Verification Code →'}
+        </button>
+        <p style={{ textAlign:'center',marginTop:16,color:'rgba(255,255,255,0.25)',fontSize:12,lineHeight:1.6 }}>
+          We'll text you a 6-digit code. One account per number.
+        </p>
+      </div>
+    </div>
+  );
+};
+
+/* ═══════════════════════════════════════════════════════════
+   AUTH — OTP VERIFY
+   ═══════════════════════════════════════════════════════════ */
+const OTPScreen = ({ phone, onVerified, onBack }) => {
+  const [digits, setDigits] = useState(['','','','','','']);
+  const [loading, setLoading] = useState(false);
+  const refs = Array.from({length:6},()=>useRef(null));
+  const toast = useToast();
+
+  const handleDigit = (i, v) => {
+    if (!/^\d*$/.test(v)) return;
+    const d = [...digits];
+    d[i] = v.slice(-1);
+    setDigits(d);
+    if (v && i < 5) refs[i+1].current?.focus();
+    if (d.every(x=>x)) verify(d.join(''));
+  };
+
+  const handleKey = (i, e) => {
+    if (e.key==='Backspace' && !digits[i] && i>0) refs[i-1].current?.focus();
+  };
+
+  const handlePaste = (e) => {
+    const text = e.clipboardData.getData('text').replace(/\D/g,'').slice(0,6);
+    if (text.length===6) {
+      setDigits(text.split(''));
+      verify(text);
+    }
+  };
+
+  const verify = async (code) => {
+    setLoading(true);
+    try {
+      const user = await verifyOTP(code);
+      onVerified(user);
+    } catch(e) {
+      toast('Incorrect code — try again', 'error');
+      setDigits(['','','','','','']);
+      refs[0].current?.focus();
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div style={{ minHeight:'100vh',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:'40px 28px',background:'#08080F' }}>
+      <div style={{ width:'100%',maxWidth:320 }}>
+        <button onClick={onBack} style={{ background:'rgba(255,255,255,0.08)',borderRadius:'50%',width:38,height:38,color:'#fff',fontSize:17,display:'flex',alignItems:'center',justifyContent:'center',marginBottom:32 }}>←</button>
+        <h2 style={{ fontSize:28,fontWeight:900,marginBottom:8,letterSpacing:-0.5 }}>Check your texts 📱</h2>
+        <p style={{ color:'rgba(255,255,255,0.45)',fontSize:15,marginBottom:36,lineHeight:1.6 }}>
+          We sent a 6-digit code to<br/><span style={{ color:'#A78BFA',fontWeight:700 }}>{phone}</span>
+        </p>
+
+        <div style={{ display:'flex',gap:10,marginBottom:28,justifyContent:'center' }} onPaste={handlePaste}>
+          {digits.map((d,i)=>(
+            <input
+              key={i} ref={refs[i]}
+              className="input-field otp-input"
+              value={d}
+              onChange={e=>handleDigit(i,e.target.value)}
+              onKeyDown={e=>handleKey(i,e)}
+              inputMode="numeric"
+              maxLength={1}
+              style={{ padding:0 }}
+            />
+          ))}
+        </div>
+
+        {loading && (
+          <div style={{ display:'flex',justifyContent:'center',marginBottom:20 }}>
+            <Spinner size={28} />
+          </div>
+        )}
+
+        <p style={{ textAlign:'center',color:'rgba(255,255,255,0.35)',fontSize:13 }}>
+          Didn't get it?{' '}
+          <span style={{ color:'#A78BFA',fontWeight:700,cursor:'pointer' }} onClick={()=>{ setDigits(['','','','','','']); onBack(); }}>
+            Resend
+          </span>
+        </p>
+      </div>
+    </div>
+  );
+};
+
+/* ═══════════════════════════════════════════════════════════
+   AUTH — PROFILE SETUP (first time only)
+   ═══════════════════════════════════════════════════════════ */
+const ProfileSetupScreen = ({ firebaseUser, onComplete }) => {
+  const [step, setStep] = useState(1); // 1=basic, 2=socials, 3=photo
+  const [name, setName] = useState('');
+  const [jobTitle, setJobTitle] = useState('');
+  const [industry, setIndustry] = useState('');
+  const [instagram, setInstagram] = useState('');
+  const [tiktok, setTiktok] = useState('');
+  const [photoURL, setPhotoURL] = useState('');
+  const [loading, setLoading] = useState(false);
+  const toast = useToast();
+
+  const industries = ['Fintech','AI/ML','Crypto/Web3','Venture Capital','Design/Tech','Marketing','Music/Entertainment','Healthcare','Real Estate','Other'];
+
+  const finish = async () => {
+    if (!name.trim()) return toast('Add your name first', 'error');
+    setLoading(true);
+    try {
+      await saveUser(firebaseUser.uid, {
+        name: name.trim(),
+        jobTitle: jobTitle.trim(),
+        industry,
+        instagram: instagram.replace('@','').trim(),
+        tiktok: tiktok.replace('@','').trim(),
+        photoURL: photoURL.trim() || null,
+        phone: firebaseUser.phoneNumber,
+        followers: 0, following: 0,
+        bio: '',
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      });
+      onComplete();
+    } catch(e) {
+      toast(e.message || 'Something went wrong', 'error');
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div style={{ minHeight:'100vh',background:'#08080F',padding:'52px 24px 40px' }}>
+      {/* Progress */}
+      <div style={{ display:'flex',gap:6,marginBottom:36 }}>
+        {[1,2,3].map(s=>(
+          <div key={s} style={{ flex:1,height:3,borderRadius:99,background:step>=s?'linear-gradient(90deg,#7C3AED,#C026D3)':'rgba(255,255,255,0.1)',transition:'background 0.3s' }}/>
+        ))}
+      </div>
+
+      {step===1 && (
+        <div className="animate-in">
+          <h2 style={{ fontSize:28,fontWeight:900,marginBottom:6,letterSpacing:-0.5 }}>Let's set up your profile</h2>
+          <p style={{ color:'rgba(255,255,255,0.45)',fontSize:15,marginBottom:32 }}>This is how other people will find you at events</p>
+
+          <label className="input-label">Your name</label>
+          <input className="input-field" value={name} onChange={e=>setName(e.target.value)} placeholder="First and last name" style={{ marginBottom:16 }} />
+
+          <label className="input-label">Job title</label>
+          <input className="input-field" value={jobTitle} onChange={e=>setJobTitle(e.target.value)} placeholder="e.g. Founder · Fintech Startup" style={{ marginBottom:16 }} />
+
+          <label className="input-label">Industry</label>
+          <div style={{ display:'flex',flexWrap:'wrap',gap:8,marginBottom:32 }}>
+            {industries.map(ind=>(
+              <button key={ind} onClick={()=>setIndustry(ind)} style={{ padding:'9px 16px',borderRadius:99,fontSize:13,fontWeight:700,background:industry===ind?'linear-gradient(135deg,#7C3AED,#C026D3)':'rgba(255,255,255,0.06)',border:`1.5px solid ${industry===ind?'transparent':'rgba(255,255,255,0.1)'}`,color:'#fff',cursor:'pointer' }}>
+                {ind}
+              </button>
+            ))}
+          </div>
+
+          <button onClick={()=>name.trim()&&setStep(2)} className="btn-primary" style={{ width:'100%',padding:16,borderRadius:16,fontSize:17,opacity:name.trim()?1:0.5 }}>
+            Continue →
+          </button>
+        </div>
+      )}
+
+      {step===2 && (
+        <div className="animate-in">
+          <h2 style={{ fontSize:28,fontWeight:900,marginBottom:6,letterSpacing:-0.5 }}>Link your socials</h2>
+          <p style={{ color:'rgba(255,255,255,0.45)',fontSize:15,marginBottom:32 }}>Help people find and follow you after the event</p>
+
+          <label className="input-label">Instagram</label>
+          <div style={{ position:'relative',marginBottom:16 }}>
+            <span style={{ position:'absolute',left:16,top:'50%',transform:'translateY(-50%)',fontSize:16 }}>📸</span>
+            <input className="input-field" value={instagram} onChange={e=>setInstagram(e.target.value)} placeholder="@yourhandle" style={{ paddingLeft:44 }} />
+          </div>
+
+          <label className="input-label">TikTok</label>
+          <div style={{ position:'relative',marginBottom:36 }}>
+            <span style={{ position:'absolute',left:16,top:'50%',transform:'translateY(-50%)',fontSize:16 }}>🎵</span>
+            <input className="input-field" value={tiktok} onChange={e=>setTiktok(e.target.value)} placeholder="@yourhandle" style={{ paddingLeft:44 }} />
+          </div>
+
+          <button onClick={()=>setStep(3)} className="btn-primary" style={{ width:'100%',padding:16,borderRadius:16,fontSize:17,marginBottom:12 }}>
+            Continue →
+          </button>
+          <button onClick={()=>setStep(3)} style={{ width:'100%',padding:14,borderRadius:16,fontSize:15,background:'none',color:'rgba(255,255,255,0.35)',fontWeight:600 }}>
+            Skip for now
+          </button>
+        </div>
+      )}
+
+      {step===3 && (
+        <div className="animate-in">
+          <h2 style={{ fontSize:28,fontWeight:900,marginBottom:6,letterSpacing:-0.5 }}>Add a profile photo</h2>
+          <p style={{ color:'rgba(255,255,255,0.45)',fontSize:15,marginBottom:32 }}>Paste a link to your photo (Instagram, Twitter, etc.)</p>
+
+          <div style={{ display:'flex',flexDirection:'column',alignItems:'center',marginBottom:28 }}>
+            <div style={{ width:110,height:110,borderRadius:'50%',background:photoURL.trim()?'transparent':colorFor(firebaseUser?.uid),border:'3px solid rgba(255,255,255,0.12)',overflow:'hidden',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:20 }}>
+              {photoURL.trim()
+                ? <img src={photoURL.trim()} style={{ width:'100%',height:'100%',objectFit:'cover' }} onError={e=>e.target.style.display='none'}/>
+                : <span style={{ fontSize:38 }}>👤</span>
+              }
+            </div>
+            <input
+              className="input-field"
+              value={photoURL}
+              onChange={e=>setPhotoURL(e.target.value)}
+              placeholder="https://... (paste image URL)"
+              style={{ width:'100%',marginBottom:8 }}
+            />
+            <p style={{ fontSize:12,color:'rgba(255,255,255,0.3)',textAlign:'center',lineHeight:1.5 }}>Right-click any photo online → Copy image address</p>
+          </div>
+
+          <button onClick={finish} disabled={loading} className="btn-primary" style={{ width:'100%',padding:16,borderRadius:16,fontSize:17,display:'flex',alignItems:'center',justifyContent:'center',gap:10,marginBottom:12 }}>
+            {loading ? <Spinner size={20}/> : "Let's go 🎉"}
+          </button>
+          <button onClick={finish} style={{ width:'100%',padding:14,borderRadius:16,fontSize:15,background:'none',color:'rgba(255,255,255,0.35)',fontWeight:600 }}>
+            Skip, add later
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* ═══════════════════════════════════════════════════════════
+   HOME SCREEN
+   ═══════════════════════════════════════════════════════════ */
+const HomeScreen = ({ user, onOpenEvent, onCreateEvent, onProfile }) => {
+  const [events, setEvents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const h = new Date().getHours();
+  const greeting = h<12?'Good morning':h<18?'Good afternoon':'Good evening';
+
+  useEffect(()=>{
+    getEvents().then(evs=>{ setEvents(evs); setLoading(false); });
+  },[]);
+
+  const liveEvents = events.filter(e=>e.isLive);
+  const upcomingEvents = events.filter(e=>!e.isLive);
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ padding:'56px 20px 16px',display:'flex',alignItems:'center',justifyContent:'space-between' }}>
+        <div>
+          <p style={{ fontSize:14,color:'rgba(255,255,255,0.4)',marginBottom:3 }}>{greeting}</p>
+          <h2 style={{ fontSize:27,fontWeight:900,letterSpacing:-0.5 }}>{user?.name?.split(' ')[0]} 👋</h2>
+        </div>
+        <div style={{ display:'flex',gap:10,alignItems:'center' }}>
+          <button style={{ background:'rgba(255,255,255,0.07)',border:'1px solid rgba(255,255,255,0.08)',borderRadius:'50%',width:41,height:41,fontSize:19,display:'flex',alignItems:'center',justifyContent:'center' }}>🔔</button>
+          <div onClick={onProfile} style={{ cursor:'pointer' }}>
+            <Avatar user={user} size={41} ring />
+          </div>
+        </div>
+      </div>
+
+      {loading && (
+        <div style={{ display:'flex',justifyContent:'center',padding:40 }}><Spinner size={32}/></div>
+      )}
+
+      {!loading && liveEvents.length===0 && upcomingEvents.length===0 && (
+        <div style={{ padding:'40px 20px',textAlign:'center' }}>
+          <div style={{ fontSize:48,marginBottom:12 }}>🎉</div>
+          <p style={{ color:'rgba(255,255,255,0.4)',fontSize:16 }}>No events yet — be the first to create one!</p>
+          <button onClick={onCreateEvent} className="btn-primary" style={{ marginTop:20,padding:'12px 28px',borderRadius:99,fontSize:15 }}>Create an Event</button>
+        </div>
+      )}
+
+      {/* Live Now */}
+      {liveEvents.length > 0 && (
+        <div style={{ padding:'8px 20px 0' }}>
+          <div style={{ display:'flex',alignItems:'center',gap:8,marginBottom:14 }}>
+            <div className="live-dot"/>
+            <span style={{ fontSize:11,fontWeight:800,color:'#10B981',letterSpacing:1.2,textTransform:'uppercase' }}>Live Now</span>
+          </div>
+          {liveEvents.map(ev=>(
+            <div key={ev.id} onClick={()=>onOpenEvent(ev)} className="card-press"
+              style={{ borderRadius:26,overflow:'hidden',cursor:'pointer',position:'relative',background:ev.gradient||'linear-gradient(135deg,#3B0764,#9D174D)',padding:'22px 20px 20px',boxShadow:'0 20px 60px rgba(109,40,217,0.4)',marginBottom:12 }}
+            >
+              <div style={{ position:'absolute',inset:0,opacity:0.35,backgroundImage:'radial-gradient(rgba(255,255,255,0.08) 1px,transparent 1px)',backgroundSize:'22px 22px',pointerEvents:'none' }}/>
+              <div style={{ position:'absolute',bottom:0,left:0,right:0,height:'55%',background:'linear-gradient(to top,rgba(0,0,0,0.5),transparent)',pointerEvents:'none' }}/>
+              {/* Flyer image */}
+              {ev.flyerURL && (
+                <div style={{ position:'absolute',inset:0,overflow:'hidden' }}>
+                  <img src={ev.flyerURL} style={{ width:'100%',height:'100%',objectFit:'cover',opacity:0.35 }} />
+                  <div style={{ position:'absolute',inset:0,background:'linear-gradient(to bottom,rgba(0,0,0,0.3) 0%,rgba(0,0,0,0.7) 100%)' }}/>
+                </div>
+              )}
+              <div style={{ position:'relative' }}>
+                <div style={{ display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:14 }}>
+                  <LiveBadge/>
+                  <span style={{ fontSize:34 }}>{ev.emoji||'🔥'}</span>
+                </div>
+                <h2 style={{ fontSize:28,fontWeight:900,letterSpacing:-0.5,color:'#fff',marginBottom:6 }}>{ev.name}</h2>
+                <div style={{ fontSize:14,color:'rgba(255,255,255,0.8)',marginBottom:4 }}>📍 {ev.location}</div>
+                <div style={{ fontSize:13,color:'rgba(255,255,255,0.65)',marginBottom:18 }}>🕖 {ev.timeRange||ev.time}</div>
+                <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between' }}>
+                  <span style={{ fontSize:14,fontWeight:700,color:'rgba(255,255,255,0.9)' }}>{ev.checkedInCount||0} checked in · {ev.total||ev.attendeeCount||0} going</span>
+                  <div style={{ background:'rgba(255,255,255,0.18)',backdropFilter:'blur(12px)',borderRadius:99,padding:'9px 18px',fontSize:13,fontWeight:700 }}>View →</div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Upcoming */}
+      {upcomingEvents.length > 0 && (
+        <div style={{ padding:'24px 20px 0' }}>
+          <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16 }}>
+            <h3 style={{ fontSize:19,fontWeight:800,letterSpacing:-0.3 }}>Upcoming</h3>
+          </div>
+          <div style={{ display:'flex',flexDirection:'column',gap:11 }}>
+            {upcomingEvents.map(ev=>(
+              <div key={ev.id} onClick={()=>onOpenEvent(ev)} className="card-press"
+                style={{ borderRadius:18,overflow:'hidden',cursor:'pointer',background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.07)',display:'flex',alignItems:'center' }}
+              >
+                <div style={{ width:72,height:72,flexShrink:0,background:ev.gradient||'linear-gradient(135deg,#3B0764,#9D174D)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:28,overflow:'hidden',position:'relative' }}>
+                  {ev.flyerURL
+                    ? <img src={ev.flyerURL} style={{ width:'100%',height:'100%',objectFit:'cover' }} />
+                    : <span>{ev.emoji||'🎭'}</span>
+                  }
+                </div>
+                <div style={{ padding:'0 14px',flex:1,minWidth:0 }}>
+                  <div style={{ fontSize:15,fontWeight:800,color:'#fff',marginBottom:3 }}>{ev.name}</div>
+                  <div style={{ fontSize:12,color:'rgba(255,255,255,0.5)',marginBottom:2 }}>{ev.location}</div>
+                  <div style={{ fontSize:12,color:'rgba(255,255,255,0.35)' }}>{ev.time||ev.timeRange} · {ev.total||ev.attendeeCount||0} going</div>
+                </div>
+                <div style={{ padding:'0 14px',color:'rgba(255,255,255,0.25)',fontSize:20 }}>›</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Create CTA */}
+      <div style={{ padding:'20px 20px 0' }}>
+        <button onClick={onCreateEvent} style={{ width:'100%',padding:15,borderRadius:16,fontSize:15,fontWeight:600,background:'rgba(255,255,255,0.04)',border:'1.5px dashed rgba(255,255,255,0.12)',color:'rgba(255,255,255,0.5)',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:8 }}>
+          <span style={{ fontSize:18 }}>➕</span> Create your own event
+        </button>
+      </div>
+    </div>
+  );
+};
+
+/* ═══════════════════════════════════════════════════════════
+   EVENT SCREEN
+   ═══════════════════════════════════════════════════════════ */
+const EventScreen = ({ event, currentUser, onBack, onDm }) => {
+  const [tab, setTab] = useState('feed');
+  const [feed, setFeed] = useState([]);
+  const [attendees, setAttendees] = useState([]);
+  const [postText, setPostText] = useState('');
+  const [checkedIn, setCheckedIn] = useState(false);
+  const [followed, setFollowed] = useState({});
+  const toast = useToast();
+
+  // Networking recs based on industry match
+  const netRecs = attendees
+    .filter(u=>u.id!==currentUser?.id)
+    .map(u=>{
+      let score = 40;
+      let reason = 'Strong network match';
+      if (u.industry && currentUser?.industry) {
+        if (u.industry===currentUser.industry) { score+=50; reason=`Both in ${currentUser.industry}`; }
+        else { score+=20; reason=`${u.industry} × ${currentUser.industry||'your field'}`; }
+      }
+      if (u.followers>10000) score+=10;
+      if (u.jobTitle?.toLowerCase().includes('partner')||u.jobTitle?.toLowerCase().includes('founder')) score+=8;
+      return { user:u, score:Math.min(score,97), reason };
+    })
+    .sort((a,b)=>b.score-a.score).slice(0,4);
+
+  useEffect(()=>{
+    if (!event?.id) return;
+    const unsub = watchFeed(event.id, setFeed);
+    getAttendees(event.id).then(setAttendees);
+    return ()=>unsub();
+  },[event?.id]);
+
+  const doCheckIn = async () => {
+    if (checkedIn||!currentUser?.id) return;
+    try {
+      await checkIn(event.id, currentUser.id);
+      await addPost(event.id, { userId:currentUser.id, userName:currentUser.name, userPhoto:currentUser.photoURL||null, type:'arrived', text:'Just checked in! 🎉', likes:[], userJob:currentUser.jobTitle||'' });
+      setCheckedIn(true);
+      setAttendees(a=>[...a, currentUser]);
+      toast('Checked in! 🎉', 'success');
+    } catch(e) { toast('Check-in failed', 'error'); }
+  };
+
+  const doPost = async () => {
+    if (!postText.trim()||!currentUser?.id) return;
+    try {
+      await addPost(event.id, { userId:currentUser.id, userName:currentUser.name, userPhoto:currentUser.photoURL||null, type:'shoutout', text:postText.trim(), likes:[], userJob:currentUser.jobTitle||'' });
+      setPostText('');
+    } catch(e) { toast('Failed to post', 'error'); }
+  };
+
+  const doLike = async (post) => {
+    if (!currentUser?.id) return;
+    const liked = post.likes?.includes(currentUser.id);
+    await toggleLike(event.id, post.id, currentUser.id, liked);
+  };
+
+  const tabs = [
+    { id:'feed',     icon:'📡', label:'Feed'    },
+    { id:'people',   icon:'👥', label:'People'  },
+    { id:'connect',  icon:'⚡', label:'Connect' },
+    { id:'messages', icon:'💬', label:'Messages'},
+  ];
+
+  return (
+    <div style={{ minHeight:'100vh',background:'#08080F' }}>
+      {/* Event Header */}
+      <div style={{ position:'relative',background:event.gradient||'linear-gradient(135deg,#3B0764,#9D174D)',padding:'52px 20px 22px',overflow:'hidden' }}>
+        {event.flyerURL && (
+          <div style={{ position:'absolute',inset:0 }}>
+            <img src={event.flyerURL} style={{ width:'100%',height:'100%',objectFit:'cover',opacity:0.4 }} />
+            <div style={{ position:'absolute',inset:0,background:'linear-gradient(to bottom,rgba(0,0,0,0.3),rgba(0,0,0,0.75))' }}/>
+          </div>
+        )}
+        {!event.flyerURL && <div style={{ position:'absolute',inset:0,opacity:0.3,backgroundImage:'radial-gradient(rgba(255,255,255,0.07) 1px,transparent 1px)',backgroundSize:'20px 20px' }}/>}
+        <div style={{ position:'absolute',bottom:0,left:0,right:0,height:'45%',background:'linear-gradient(to top,rgba(0,0,0,0.55),transparent)',pointerEvents:'none' }}/>
+        <div style={{ position:'relative' }}>
+          <div style={{ display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:18 }}>
+            <button onClick={onBack} style={{ background:'rgba(0,0,0,0.35)',backdropFilter:'blur(12px)',border:'1px solid rgba(255,255,255,0.15)',borderRadius:'50%',width:40,height:40,color:'#fff',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',fontSize:17 }}>←</button>
+            {event.isLive && <LiveBadge/>}
+          </div>
+          <div style={{ fontSize:40,marginBottom:8 }}>{event.emoji||'🎭'}</div>
+          <h1 style={{ fontSize:30,fontWeight:900,letterSpacing:-0.8,color:'#fff',marginBottom:8 }}>{event.name}</h1>
+          <div style={{ fontSize:14,color:'rgba(255,255,255,0.8)',marginBottom:4 }}>📍 {event.location}</div>
+          <div style={{ fontSize:13,color:'rgba(255,255,255,0.65)',marginBottom:16 }}>🕖 {event.timeRange||event.time}</div>
+          <div style={{ display:'flex',alignItems:'center',gap:12,marginBottom:14 }}>
+            <span style={{ fontSize:14,fontWeight:700,color:'rgba(255,255,255,0.9)' }}>{event.checkedInCount||0} checked in · {event.total||event.attendeeCount||0} going</span>
+          </div>
+          {/* Check in */}
+          {!checkedIn
+            ? <button onClick={doCheckIn} className="btn-primary" style={{ padding:'11px 22px',borderRadius:99,fontSize:14,border:'none' }}>Check In ✓</button>
+            : <div style={{ background:'rgba(16,185,129,0.14)',border:'1px solid rgba(16,185,129,0.28)',borderRadius:13,padding:'10px 14px',display:'flex',alignItems:'center',gap:10 }}>
+                <span style={{ fontSize:16 }}>✅</span>
+                <div>
+                  <div style={{ fontSize:13,fontWeight:800,color:'#10B981' }}>You're checked in!</div>
+                  <div style={{ fontSize:11,color:'rgba(255,255,255,0.45)' }}>Your connections can see you're here</div>
+                </div>
+              </div>
+          }
+        </div>
+      </div>
+
+      {/* Tab bar */}
+      <div style={{ display:'flex',background:'rgba(8,8,15,0.95)',borderBottom:'1px solid rgba(255,255,255,0.06)',position:'sticky',top:0,zIndex:20,backdropFilter:'blur(20px)' }}>
+        {tabs.map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)} style={{ flex:1,padding:'13px 4px 11px',background:'none',border:'none',color:tab===t.id?'#fff':'rgba(255,255,255,0.38)',fontSize:11,fontWeight:tab===t.id?800:500,cursor:'pointer',borderBottom:tab===t.id?'2.5px solid #8B5CF6':'2.5px solid transparent',display:'flex',flexDirection:'column',alignItems:'center',gap:3 }}>
+            <span style={{ fontSize:16 }}>{t.icon}</span>{t.label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ padding:'16px 16px 0' }}>
+
+        {/* FEED */}
+        {tab==='feed' && (
+          <div className="animate-in">
+            <div style={{ background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.08)',borderRadius:16,padding:'12px 14px',display:'flex',gap:12,alignItems:'center',marginBottom:14 }}>
+              <Avatar user={currentUser} size={36}/>
+              <input value={postText} onChange={e=>setPostText(e.target.value)} onKeyDown={e=>e.key==='Enter'&&doPost()} placeholder="Share a shoutout to the room..." style={{ flex:1,background:'none',border:'none',color:'#fff',fontSize:14,padding:0 }}/>
+              {postText && <button onClick={doPost} style={{ background:'linear-gradient(135deg,#7C3AED,#C026D3)',border:'none',borderRadius:99,padding:'7px 15px',color:'#fff',fontSize:12,fontWeight:800,cursor:'pointer',flexShrink:0 }}>Post</button>}
+            </div>
+            {feed.length===0 && <div style={{ textAlign:'center',padding:'40px 0',color:'rgba(255,255,255,0.3)',fontSize:14 }}>No posts yet — be the first to check in!</div>}
+            {feed.map(item=>{
+              const liked = item.likes?.includes(currentUser?.id);
+              return (
+                <div key={item.id} style={{ marginBottom:11,background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)',borderRadius:18,overflow:'hidden' }}>
+                  {item.photoURL && <div style={{ height:160 }}><img src={item.photoURL} style={{ width:'100%',height:'100%',objectFit:'cover' }}/></div>}
+                  <div style={{ padding:'12px 14px' }}>
+                    <div style={{ display:'flex',alignItems:'center',gap:10,marginBottom:8 }}>
+                      <Avatar user={{ id:item.userId,name:item.userName,photoURL:item.userPhoto }} size={36} online/>
+                      <div style={{ flex:1,minWidth:0 }}>
+                        <div style={{ display:'flex',alignItems:'center',gap:7,marginBottom:1 }}>
+                          <span style={{ fontWeight:800,fontSize:14 }}>{item.userName}</span>
+                          {item.type==='arrived'&&<Chip label="arrived ✓" bg="rgba(16,185,129,0.14)" color="#34D399"/>}
+                        </div>
+                        <div style={{ fontSize:12,color:'rgba(255,255,255,0.38)' }}>{item.userJob}</div>
+                      </div>
+                      <button onClick={()=>onDm({id:item.userId,name:item.userName,photoURL:item.userPhoto,jobTitle:item.userJob})} style={{ background:'rgba(255,255,255,0.07)',border:'none',borderRadius:99,padding:'6px 12px',color:'rgba(255,255,255,0.6)',fontSize:12,fontWeight:600,cursor:'pointer' }}>💬 DM</button>
+                    </div>
+                    <p style={{ margin:'0 0 10px',fontSize:14,color:'rgba(255,255,255,0.82)',lineHeight:1.55 }}>{item.text}</p>
+                    <button onClick={()=>doLike(item)} style={{ background:'none',border:'none',display:'flex',alignItems:'center',gap:5,color:liked?'#EC4899':'rgba(255,255,255,0.38)',fontSize:13,fontWeight:700,cursor:'pointer',padding:0 }}>
+                      {liked?'❤️':'🤍'} {item.likes?.length||0}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* PEOPLE */}
+        {tab==='people' && (
+          <div className="animate-in">
+            <div style={{ fontSize:13,color:'rgba(255,255,255,0.38)',marginBottom:16,fontWeight:600 }}>{attendees.length} checked in</div>
+            {attendees.map(u=>(
+              <div key={u.id} style={{ marginBottom:10,background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)',borderRadius:17,padding:'13px 14px',display:'flex',alignItems:'center',gap:13 }}>
+                <Avatar user={u} size={48} online/>
+                <div style={{ flex:1,minWidth:0 }}>
+                  <div style={{ fontWeight:800,fontSize:15,marginBottom:2 }}>{u.name}{u.id===currentUser?.id&&<span style={{ marginLeft:7,fontSize:11,color:'#A78BFA',fontWeight:700 }}>You</span>}</div>
+                  <div style={{ fontSize:12,color:'rgba(255,255,255,0.5)',marginBottom:4 }}>{u.jobTitle}</div>
+                  <div style={{ display:'flex',gap:6,flexWrap:'wrap' }}>
+                    {u.instagram&&<Chip label={`📸 @${u.instagram}`} bg="rgba(225,48,108,0.12)" color="#F9A8D4"/>}
+                    {u.tiktok&&<Chip label={`🎵 @${u.tiktok}`} bg="rgba(255,255,255,0.06)" color="rgba(255,255,255,0.6)"/>}
+                  </div>
+                </div>
+                {u.id!==currentUser?.id && (
+                  <button onClick={()=>onDm(u)} style={{ background:'rgba(255,255,255,0.08)',border:'1px solid rgba(255,255,255,0.1)',borderRadius:99,padding:'8px 14px',color:'#fff',fontSize:13,fontWeight:700,cursor:'pointer',flexShrink:0,whiteSpace:'nowrap' }}>👋 Hi</button>
+                )}
+              </div>
+            ))}
+            {attendees.length===0&&<div style={{ textAlign:'center',padding:'40px 0',color:'rgba(255,255,255,0.3)',fontSize:14 }}>No one checked in yet. Be first!</div>}
+          </div>
+        )}
+
+        {/* CONNECT */}
+        {tab==='connect' && (
+          <div className="animate-in">
+            <div style={{ marginBottom:22 }}>
+              <h3 style={{ fontSize:20,fontWeight:900,letterSpacing:-0.4,marginBottom:5 }}>Who you should meet</h3>
+              <p style={{ fontSize:13,color:'rgba(255,255,255,0.4)' }}>Based on your {currentUser?.industry||'industry'} · {netRecs.length} matches tonight</p>
+            </div>
+            {netRecs.map(rec=>(
+              <div key={rec.user.id} style={{ marginBottom:16,background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.07)',borderRadius:22,overflow:'hidden' }}>
+                <div style={{ background:`linear-gradient(135deg,${colorFor(rec.user.id)}18,transparent)`,borderBottom:'1px solid rgba(255,255,255,0.05)',padding:'11px 16px',display:'flex',justifyContent:'space-between',alignItems:'center' }}>
+                  <span style={{ fontSize:13,color:'rgba(255,255,255,0.55)',fontWeight:600 }}>{rec.reason}</span>
+                  <div style={{ background:colorFor(rec.user.id),borderRadius:99,padding:'3px 12px',fontSize:13,fontWeight:900 }}>{rec.score}% match</div>
+                </div>
+                <div style={{ padding:'16px' }}>
+                  <div style={{ display:'flex',gap:14,marginBottom:14 }}>
+                    <Avatar user={rec.user} size={52} online/>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontWeight:900,fontSize:17,letterSpacing:-0.3,marginBottom:3 }}>{rec.user.name}</div>
+                      <div style={{ fontSize:13,color:'rgba(255,255,255,0.55)',marginBottom:6 }}>{rec.user.jobTitle}</div>
+                      <div style={{ display:'flex',gap:6,flexWrap:'wrap' }}>
+                        {rec.user.instagram&&<Chip label={`📸 @${rec.user.instagram}`} bg="rgba(225,48,108,0.1)" color="#F9A8D4"/>}
+                        {rec.user.tiktok&&<Chip label={`🎵 @${rec.user.tiktok}`} bg="rgba(255,255,255,0.05)" color="rgba(255,255,255,0.55)"/>}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ display:'flex',gap:10 }}>
+                    <button onClick={()=>onDm(rec.user)} style={{ flex:1,padding:'12px',borderRadius:13,fontSize:14,fontWeight:800,background:'linear-gradient(135deg,#7C3AED,#C026D3)',border:'none',color:'#fff',cursor:'pointer',boxShadow:'0 4px 16px rgba(124,58,237,0.4)' }}>👋 Say Hi</button>
+                    <button onClick={()=>setFollowed(f=>({...f,[rec.user.id]:!f[rec.user.id]}))} style={{ flex:1,padding:'12px',borderRadius:13,fontSize:14,fontWeight:700,background:followed[rec.user.id]?'rgba(139,92,246,0.2)':'rgba(255,255,255,0.07)',border:`1px solid ${followed[rec.user.id]?'rgba(139,92,246,0.4)':'rgba(255,255,255,0.1)'}`,color:followed[rec.user.id]?'#A78BFA':'#fff',cursor:'pointer' }}>
+                      {followed[rec.user.id]?'✓ Following':'Follow +'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+            {netRecs.length===0&&<div style={{ textAlign:'center',padding:'40px 0',color:'rgba(255,255,255,0.3)',fontSize:14 }}>More people need to check in for recommendations!</div>}
+          </div>
+        )}
+
+        {/* MESSAGES */}
+        {tab==='messages' && (
+          <div className="animate-in">
+            <p style={{ fontSize:13,color:'rgba(255,255,255,0.38)',marginBottom:16 }}>DMs from {event.name}</p>
+            {attendees.filter(u=>u.id!==currentUser?.id).map(u=>(
+              <div key={u.id} onClick={()=>onDm(u)} className="card-press" style={{ display:'flex',alignItems:'center',gap:13,padding:'14px',background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)',borderRadius:17,marginBottom:10,cursor:'pointer' }}>
+                <Avatar user={u} size={48} online/>
+                <div style={{ flex:1,minWidth:0 }}>
+                  <div style={{ fontWeight:800,fontSize:15,marginBottom:4 }}>{u.name}</div>
+                  <div style={{ fontSize:13,color:'rgba(255,255,255,0.45)' }}>{u.jobTitle}</div>
+                </div>
+                <button style={{ background:'rgba(255,255,255,0.07)',border:'none',borderRadius:99,padding:'8px 14px',color:'#fff',fontSize:13,fontWeight:700,cursor:'pointer' }}>DM</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+/* ═══════════════════════════════════════════════════════════
+   DM SCREEN
+   ═══════════════════════════════════════════════════════════ */
+const DMScreen = ({ user, currentUser, onBack }) => {
+  const [msgs, setMsgs] = useState([]);
+  const [input, setInput] = useState('');
+  const bottomRef = useRef(null);
+  const id = dmId(currentUser?.id||'', user?.id||'');
+
+  useEffect(()=>{
+    if (!id||id==='__') return;
+    const unsub = watchDMMessages(id, setMsgs);
+    return ()=>unsub();
+  },[id]);
+
+  useEffect(()=>{ bottomRef.current?.scrollIntoView({behavior:'smooth'}); },[msgs]);
+
+  const send = async () => {
+    if (!input.trim()||!currentUser?.id) return;
+    const text = input;
+    setInput('');
+    await sendMessage(id, currentUser.id, text);
+  };
+
+  return (
+    <div style={{ minHeight:'100vh',background:'#08080F',display:'flex',flexDirection:'column' }}>
+      <div style={{ padding:'52px 16px 14px',display:'flex',alignItems:'center',gap:12,borderBottom:'1px solid rgba(255,255,255,0.06)',background:'rgba(8,8,15,0.95)',backdropFilter:'blur(20px)',flexShrink:0 }}>
+        <button onClick={onBack} style={{ background:'rgba(255,255,255,0.08)',border:'none',borderRadius:'50%',width:38,height:38,color:'#fff',fontSize:18,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0 }}>←</button>
+        <Avatar user={user} size={40} online/>
+        <div style={{ flex:1 }}>
+          <div style={{ fontWeight:800,fontSize:16 }}>{user?.name}</div>
+          <div style={{ fontSize:12,color:'rgba(255,255,255,0.45)' }}>{user?.jobTitle}</div>
+        </div>
+        <div style={{ display:'flex',gap:6 }}>
+          {user?.instagram && <a href={`https://instagram.com/${user.instagram}`} target="_blank" rel="noopener noreferrer" style={{ width:34,height:34,borderRadius:'50%',background:'rgba(225,48,108,0.15)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:16,textDecoration:'none' }}>📸</a>}
+          {user?.tiktok && <a href={`https://tiktok.com/@${user.tiktok}`} target="_blank" rel="noopener noreferrer" style={{ width:34,height:34,borderRadius:'50%',background:'rgba(255,255,255,0.07)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:16,textDecoration:'none' }}>🎵</a>}
+        </div>
+      </div>
+      <div style={{ flex:1,padding:'16px',display:'flex',flexDirection:'column',gap:10,overflowY:'auto' }}>
+        {msgs.length===0 && (
+          <div style={{ textAlign:'center',marginTop:40 }}>
+            <Avatar user={user} size={64} ring/>
+            <p style={{ marginTop:12,color:'rgba(255,255,255,0.4)',fontSize:14 }}>Say hi to {user?.name?.split(' ')[0]}!</p>
+          </div>
+        )}
+        {msgs.map(m=>{
+          const isMe = m.senderId===currentUser?.id;
+          return (
+            <div key={m.id} style={{ display:'flex',justifyContent:isMe?'flex-end':'flex-start',gap:8,alignItems:'flex-end' }}>
+              {!isMe && <Avatar user={user} size={28}/>}
+              <div style={{ maxWidth:'72%',padding:'11px 15px',borderRadius:isMe?'18px 18px 4px 18px':'18px 18px 18px 4px',background:isMe?'linear-gradient(135deg,#6D28D9,#9D174D)':'rgba(255,255,255,0.08)',fontSize:14,lineHeight:1.55,color:'#fff' }}>
+                {m.text}
+              </div>
+            </div>
+          );
+        })}
+        <div ref={bottomRef}/>
+      </div>
+      <div style={{ padding:'12px 16px 32px',borderTop:'1px solid rgba(255,255,255,0.06)',display:'flex',gap:10,alignItems:'center',background:'#08080F',flexShrink:0 }}>
+        <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&send()} placeholder={`Message ${user?.name?.split(' ')[0]}...`} style={{ flex:1,padding:'12px 16px',borderRadius:99,background:'rgba(255,255,255,0.07)',border:'1px solid rgba(255,255,255,0.1)',color:'#fff',fontSize:14 }}/>
+        <button onClick={send} style={{ width:44,height:44,borderRadius:'50%',background:'linear-gradient(135deg,#7C3AED,#C026D3)',border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',fontSize:18,flexShrink:0,boxShadow:'0 4px 16px rgba(124,58,237,0.5)' }}>➤</button>
+      </div>
+    </div>
+  );
+};
+
+/* ═══════════════════════════════════════════════════════════
+   CREATE EVENT SCREEN
+   ═══════════════════════════════════════════════════════════ */
+const CreateScreen = ({ currentUser, onBack, onCreated }) => {
+  const [form, setForm] = useState({ name:'',location:'',date:'',time:'',privacy:'invite',description:'',emoji:'🔥' });
+  const [flyerURL, setFlyerURL] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [done, setDone] = useState(false);
+  const toast = useToast();
+
+  const set = k => e => setForm(f=>({...f,[k]:e.target.value}));
+  const GRADIENTS = ['linear-gradient(135deg,#3B0764,#7C3AED)','linear-gradient(135deg,#052e16,#065F46)','linear-gradient(135deg,#431407,#9D174D)','linear-gradient(135deg,#0c2461,#1e3799)','linear-gradient(135deg,#1a1a2e,#16213e)'];
+  const [gradIdx, setGradIdx] = useState(0);
+  const EMOJIS = ['🔥','🎭','🍸','🎶','🤝','🚀','🎨','💡','🌆','🎉'];
+
+  const submit = async () => {
+    if (!form.name.trim()) return toast('Give your event a name', 'error');
+    if (!form.location.trim()) return toast('Add a location', 'error');
+    setLoading(true);
+    try {
+      await createEvent({
+        name: form.name.trim(),
+        location: form.location.trim(),
+        description: form.description.trim(),
+        time: form.date && form.time ? `${form.date} · ${form.time}` : form.date || form.time || '',
+        privacy: form.privacy,
+        emoji: form.emoji,
+        gradient: GRADIENTS[gradIdx],
+        hostId: currentUser?.id,
+        hostName: currentUser?.name,
+        isLive: false,
+        checkedInCount: 0,
+        total: 0,
+        flyerURL: flyerURL.trim() || null,
+      });
+      setDone(true);
+    } catch(e) {
+      toast(e.message||'Failed to create event', 'error');
+    } finally { setLoading(false); }
+  };
+
+  if (done) return (
+    <div style={{ minHeight:'100vh',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:28,textAlign:'center',background:'#08080F' }}>
+      <div style={{ fontSize:64,marginBottom:16 }}>🎉</div>
+      <h2 style={{ fontSize:28,fontWeight:900,letterSpacing:-0.5,marginBottom:8 }}>Event Created!</h2>
+      <p style={{ color:'rgba(255,255,255,0.5)',fontSize:16,marginBottom:32,lineHeight:1.55 }}>"{form.name}" is live. Share the link to invite your people.</p>
+      <button onClick={()=>{onCreated();onBack();}} className="btn-primary" style={{ padding:'14px 36px',borderRadius:99,fontSize:16,border:'none' }}>Back to Home</button>
+    </div>
+  );
+
+  return (
+    <div style={{ minHeight:'100vh',background:'#08080F' }}>
+      <div style={{ padding:'52px 20px 16px',display:'flex',alignItems:'center',gap:12,borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
+        <button onClick={onBack} style={{ background:'rgba(255,255,255,0.08)',border:'none',borderRadius:'50%',width:38,height:38,color:'#fff',fontSize:18,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center' }}>←</button>
+        <h2 style={{ fontSize:22,fontWeight:900,letterSpacing:-0.3 }}>Create Event</h2>
+      </div>
+      <div style={{ padding:'22px 20px 40px' }}>
+        {/* Cover / flyer preview */}
+        <div style={{ borderRadius:22,background:flyerURL.trim()?'transparent':GRADIENTS[gradIdx],height:160,display:'flex',alignItems:'center',justifyContent:'center',border:'2px solid rgba(255,255,255,0.1)',marginBottom:12,overflow:'hidden',position:'relative',transition:'background 0.3s' }}>
+          {flyerURL.trim()
+            ? <img src={flyerURL.trim()} style={{ width:'100%',height:'100%',objectFit:'cover' }} onError={e=>e.target.style.display='none'}/>
+            : <>
+                <div style={{ position:'absolute',inset:0,opacity:0.25,backgroundImage:'radial-gradient(rgba(255,255,255,0.08) 1px,transparent 1px)',backgroundSize:'18px 18px' }}/>
+                <div style={{ textAlign:'center',position:'relative' }}>
+                  <div style={{ fontSize:36,marginBottom:6 }}>{form.emoji}</div>
+                  <div style={{ fontSize:13,color:'rgba(255,255,255,0.5)',fontWeight:600 }}>Event cover</div>
+                </div>
+              </>
+          }
+        </div>
+
+        {/* Flyer URL input */}
+        <input
+          className="input-field"
+          value={flyerURL}
+          onChange={e=>setFlyerURL(e.target.value)}
+          placeholder="🖼️ Paste flyer image URL (optional)"
+          style={{ marginBottom:12 }}
+        />
+
+        {/* Gradient & emoji pickers (when no flyer URL) */}
+        {!flyerURL.trim() && (
+          <>
+            <div style={{ display:'flex',gap:8,marginBottom:12,overflowX:'auto',paddingBottom:4 }}>
+              {GRADIENTS.map((g,i)=>(
+                <button key={i} onClick={()=>setGradIdx(i)} style={{ width:36,height:36,borderRadius:10,background:g,border:`2px solid ${gradIdx===i?'white':'transparent'}`,flexShrink:0,cursor:'pointer' }}/>
+              ))}
+            </div>
+            <div style={{ display:'flex',gap:8,marginBottom:18,overflowX:'auto',paddingBottom:4 }}>
+              {EMOJIS.map(e=>(
+                <button key={e} onClick={()=>setForm(f=>({...f,emoji:e}))} style={{ width:38,height:38,borderRadius:10,background:form.emoji===e?'rgba(139,92,246,0.3)':'rgba(255,255,255,0.06)',border:`1.5px solid ${form.emoji===e?'rgba(139,92,246,0.6)':'rgba(255,255,255,0.08)'}`,fontSize:20,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center' }}>{e}</button>
+              ))}
+            </div>
+          </>
+        )}
+        {flyerURL.trim() && <button onClick={()=>setFlyerURL('')} style={{ background:'none',color:'rgba(255,100,100,0.7)',fontSize:13,fontWeight:700,marginBottom:12,cursor:'pointer',border:'none' }}>✕ Remove flyer</button>}
+
+        <label className="input-label">Event Name</label>
+        <input className="input-field" value={form.name} onChange={set('name')} placeholder="e.g. Tech Happy Hour" style={{ marginBottom:14 }}/>
+
+        <label className="input-label">Location</label>
+        <input className="input-field" value={form.location} onChange={set('location')} placeholder="e.g. Soho House, NYC" style={{ marginBottom:14 }}/>
+
+        <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:14 }}>
+          <div><label className="input-label">Date</label><input type="date" className="input-field" value={form.date} onChange={set('date')}/></div>
+          <div><label className="input-label">Time</label><input type="time" className="input-field" value={form.time} onChange={set('time')}/></div>
+        </div>
+
+        <label className="input-label">Who can join?</label>
+        <div style={{ display:'flex',gap:10,marginBottom:14 }}>
+          {[{id:'invite',label:'🔒 Invite Only'},{id:'open',label:'🌐 Open'}].map(o=>(
+            <button key={o.id} onClick={()=>setForm(f=>({...f,privacy:o.id}))} style={{ flex:1,padding:'12px',borderRadius:13,fontSize:14,fontWeight:700,cursor:'pointer',background:form.privacy===o.id?'linear-gradient(135deg,#6D28D9,#9D174D)':'rgba(255,255,255,0.05)',border:`1.5px solid ${form.privacy===o.id?'transparent':'rgba(255,255,255,0.09)'}`,color:'#fff',boxShadow:form.privacy===o.id?'0 4px 16px rgba(109,40,217,0.35)':'none' }}>
+              {o.label}
+            </button>
+          ))}
+        </div>
+
+        <label className="input-label">Description</label>
+        <textarea className="input-field" value={form.description} onChange={set('description')} placeholder="What's this event about?" rows={3} style={{ lineHeight:1.55,marginBottom:20 }}/>
+
+        <button onClick={submit} disabled={loading} className={form.name.trim()?"btn-primary":""} style={{ width:'100%',padding:16,borderRadius:16,fontSize:17,border:'none',background:form.name.trim()?undefined:'rgba(255,255,255,0.08)',color:form.name.trim()?'#fff':'rgba(255,255,255,0.3)',cursor:form.name.trim()?'pointer':'default',display:'flex',alignItems:'center',justifyContent:'center',gap:10 }}>
+          {loading?<><Spinner size={20}/> Creating...</>:'Create Event 🎉'}
+        </button>
+      </div>
+    </div>
+  );
+};
+
+/* ═══════════════════════════════════════════════════════════
+   PROFILE SCREEN
+   ═══════════════════════════════════════════════════════════ */
+const ProfileScreen = ({ user, currentUser, onDm, onEditProfile }) => {
+  const isMe = !user || user.id===currentUser?.id;
+  const profile = isMe ? currentUser : user;
+
+  return (
+    <div>
+      <div style={{ height:150,background:'linear-gradient(135deg,#3B0764,#6D28D9,#9D174D)',position:'relative',flexShrink:0 }}>
+        <div style={{ position:'absolute',inset:0,opacity:0.3,backgroundImage:'radial-gradient(rgba(255,255,255,0.08) 1px,transparent 1px)',backgroundSize:'20px 20px' }}/>
+      </div>
+      <div style={{ padding:'0 20px',marginTop:-50 }}>
+        <div style={{ display:'flex',justifyContent:'space-between',alignItems:'flex-end',marginBottom:14 }}>
+          <div style={{ borderRadius:'50%',border:'4px solid #08080F' }}>
+            <Avatar user={profile} size={90} ring/>
+          </div>
+          {isMe
+            ? <button onClick={onEditProfile} style={{ background:'rgba(255,255,255,0.08)',border:'1px solid rgba(255,255,255,0.14)',borderRadius:99,padding:'10px 20px',color:'#fff',fontSize:14,fontWeight:700,cursor:'pointer' }}>Edit Profile</button>
+            : <button onClick={()=>onDm(profile)} className="btn-primary" style={{ padding:'10px 20px',borderRadius:99,fontSize:14,border:'none' }}>💬 Message</button>
+          }
+        </div>
+        <h2 style={{ fontSize:25,fontWeight:900,letterSpacing:-0.5,marginBottom:3 }}>{profile?.name}</h2>
+        <div style={{ fontSize:15,fontWeight:600,color:'rgba(255,255,255,0.7)',marginBottom:6 }}>{profile?.jobTitle}</div>
+        {profile?.bio && <p style={{ fontSize:14,color:'rgba(255,255,255,0.55)',lineHeight:1.55,marginBottom:14 }}>{profile.bio}</p>}
+
+        {/* Social links */}
+        {(profile?.instagram||profile?.tiktok) && (
+          <div style={{ display:'flex',gap:10,marginBottom:18,flexWrap:'wrap' }}>
+            {profile?.instagram && <SocialLink platform="instagram" handle={profile.instagram}/>}
+            {profile?.tiktok && <SocialLink platform="tiktok" handle={profile.tiktok}/>}
+          </div>
+        )}
+
+        {/* Stats */}
+        <div style={{ display:'flex',gap:0,marginBottom:22,background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.07)',borderRadius:16,overflow:'hidden' }}>
+          {[{l:'Followers',v:fmt(profile?.followers)},{l:'Following',v:fmt(profile?.following)},{l:'Events',v:profile?.eventsCount||'0'},{l:'Connects',v:profile?.connectsCount||'0'}].map((s,i,arr)=>(
+            <div key={s.l} style={{ flex:1,textAlign:'center',padding:'14px 8px',borderRight:i<arr.length-1?'1px solid rgba(255,255,255,0.07)':'none' }}>
+              <div style={{ fontSize:21,fontWeight:900,letterSpacing:-0.5 }}>{s.v}</div>
+              <div style={{ fontSize:11,color:'rgba(255,255,255,0.38)',fontWeight:600,marginTop:2 }}>{s.l}</div>
+            </div>
+          ))}
+        </div>
+
+        {profile?.industry && (
+          <div style={{ display:'flex',gap:8,marginBottom:24,flexWrap:'wrap' }}>
+            <Chip label={profile.industry} bg="rgba(139,92,246,0.18)" color="#C4B5FD"/>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+/* ═══════════════════════════════════════════════════════════
+   EDIT PROFILE SCREEN
+   ═══════════════════════════════════════════════════════════ */
+const EditProfileScreen = ({ currentUser, onBack, onSaved }) => {
+  const [name, setName] = useState(currentUser?.name||'');
+  const [jobTitle, setJobTitle] = useState(currentUser?.jobTitle||'');
+  const [bio, setBio] = useState(currentUser?.bio||'');
+  const [instagram, setInstagram] = useState(currentUser?.instagram||'');
+  const [tiktok, setTiktok] = useState(currentUser?.tiktok||'');
+  const [photoURL, setPhotoURL] = useState(currentUser?.photoURL||'');
+  const [loading, setLoading] = useState(false);
+  const toast = useToast();
+
+  const save = async () => {
+    if (!name.trim()) return toast('Name is required','error');
+    setLoading(true);
+    try {
+      await saveUser(currentUser.id, { name:name.trim(), jobTitle:jobTitle.trim(), bio:bio.trim(), instagram:instagram.replace('@','').trim(), tiktok:tiktok.replace('@','').trim(), photoURL:photoURL.trim()||null });
+      toast('Profile saved!','success');
+      onSaved();
+    } catch(e) { toast(e.message||'Save failed','error'); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <div style={{ minHeight:'100vh',background:'#08080F' }}>
+      <div style={{ padding:'52px 20px 16px',display:'flex',alignItems:'center',gap:12,borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
+        <button onClick={onBack} style={{ background:'rgba(255,255,255,0.08)',border:'none',borderRadius:'50%',width:38,height:38,color:'#fff',fontSize:18,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center' }}>←</button>
+        <h2 style={{ fontSize:22,fontWeight:900 }}>Edit Profile</h2>
+      </div>
+      <div style={{ padding:'24px 20px 40px' }}>
+        {/* Photo URL */}
+        <div style={{ display:'flex',flexDirection:'column',alignItems:'center',marginBottom:24 }}>
+          <div style={{ position:'relative',marginBottom:12 }}>
+            <Avatar user={{ ...currentUser,photoURL:photoURL.trim()||null }} size={90} ring/>
+          </div>
+          <label className="input-label" style={{ alignSelf:'flex-start',width:'100%' }}>Profile photo URL</label>
+          <input className="input-field" value={photoURL} onChange={e=>setPhotoURL(e.target.value)} placeholder="https://... (paste image URL)" style={{ width:'100%' }}/>
+        </div>
+
+        <label className="input-label">Name</label>
+        <input className="input-field" value={name} onChange={e=>setName(e.target.value)} style={{ marginBottom:14 }}/>
+
+        <label className="input-label">Job Title</label>
+        <input className="input-field" value={jobTitle} onChange={e=>setJobTitle(e.target.value)} placeholder="e.g. Founder · Startup" style={{ marginBottom:14 }}/>
+
+        <label className="input-label">Bio</label>
+        <textarea className="input-field" value={bio} onChange={e=>setBio(e.target.value)} placeholder="Tell people what you're about..." rows={3} style={{ lineHeight:1.55,marginBottom:14 }}/>
+
+        <label className="input-label">Instagram</label>
+        <div style={{ position:'relative',marginBottom:14 }}>
+          <span style={{ position:'absolute',left:16,top:'50%',transform:'translateY(-50%)',fontSize:16 }}>📸</span>
+          <input className="input-field" value={instagram} onChange={e=>setInstagram(e.target.value)} placeholder="@yourhandle" style={{ paddingLeft:44 }}/>
+        </div>
+
+        <label className="input-label">TikTok</label>
+        <div style={{ position:'relative',marginBottom:28 }}>
+          <span style={{ position:'absolute',left:16,top:'50%',transform:'translateY(-50%)',fontSize:16 }}>🎵</span>
+          <input className="input-field" value={tiktok} onChange={e=>setTiktok(e.target.value)} placeholder="@yourhandle" style={{ paddingLeft:44 }}/>
+        </div>
+
+        <button onClick={save} disabled={loading} className="btn-primary" style={{ width:'100%',padding:16,borderRadius:16,fontSize:17,border:'none',display:'flex',alignItems:'center',justifyContent:'center',gap:10 }}>
+          {loading?<><Spinner size={20}/> Saving...</>:'Save Changes'}
+        </button>
+      </div>
+    </div>
+  );
+};
+
+/* ═══════════════════════════════════════════════════════════
+   MESSAGES SCREEN
+   ═══════════════════════════════════════════════════════════ */
+const MessagesScreen = ({ currentUser, onDm }) => {
+  const [threads, setThreads] = useState([]);
+
+  useEffect(()=>{
+    if (!currentUser?.id) return;
+    const unsub = watchUserDMs(currentUser.id, setThreads);
+    return ()=>unsub();
+  },[currentUser?.id]);
+
+  return (
+    <div style={{ padding:'56px 20px 20px' }}>
+      <h2 style={{ fontSize:26,fontWeight:900,letterSpacing:-0.5,marginBottom:6 }}>Messages</h2>
+      <p style={{ fontSize:13,color:'rgba(255,255,255,0.38)',marginBottom:22 }}>Your conversations</p>
+      {threads.length===0 && <div style={{ textAlign:'center',padding:'60px 0',color:'rgba(255,255,255,0.3)' }}>
+        <div style={{ fontSize:40,marginBottom:12 }}>💬</div>
+        <p>No messages yet.<br/>Say hi to someone at an event!</p>
+      </div>}
+      {threads.map(t=>{
+        const otherId = t.participants?.find(p=>p!==currentUser?.id);
+        return (
+          <DMThreadRow key={t.id} threadId={t.id} otherId={otherId} preview={t.lastMessage} currentUser={currentUser} onDm={onDm}/>
+        );
+      })}
+    </div>
+  );
+};
+
+const DMThreadRow = ({ otherId, preview, currentUser, onDm }) => {
+  const [otherUser, setOtherUser] = useState(null);
+  useEffect(()=>{ if(otherId) getUser(otherId).then(setOtherUser); },[otherId]);
+  if (!otherUser) return null;
+  return (
+    <div onClick={()=>onDm(otherUser)} className="card-press" style={{ display:'flex',alignItems:'center',gap:13,padding:'14px',background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)',borderRadius:17,marginBottom:10,cursor:'pointer' }}>
+      <Avatar user={otherUser} size={50} online/>
+      <div style={{ flex:1,minWidth:0 }}>
+        <div style={{ fontWeight:800,fontSize:15,marginBottom:4 }}>{otherUser.name}</div>
+        <div style={{ fontSize:13,color:'rgba(255,255,255,0.45)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis' }}>{preview||'Start a conversation'}</div>
+      </div>
+    </div>
+  );
+};
+
+/* ═══════════════════════════════════════════════════════════
+   BOTTOM NAV
+   ═══════════════════════════════════════════════════════════ */
+const BottomNav = ({ active, onNav }) => {
+  const items = [
+    { id:'home',     emoji:'🏠', label:'Home'     },
+    { id:'explore',  emoji:'🔍', label:'Explore'  },
+    { id:'create',   emoji:'',   label:''         },
+    { id:'messages', emoji:'💬', label:'Messages' },
+    { id:'profile',  emoji:'👤', label:'Profile'  },
+  ];
+  return (
+    <div style={{ position:'fixed',bottom:0,left:'50%',transform:'translateX(-50%)',width:'100%',maxWidth:430,background:'rgba(6,6,12,0.94)',backdropFilter:'blur(24px)',borderTop:'1px solid rgba(255,255,255,0.07)',display:'flex',alignItems:'center',justifyContent:'space-around',padding:'10px 16px 26px',zIndex:100 }}>
+      {items.map(item=>(
+        item.id==='create'
+          ? <button key="create" onClick={()=>onNav('create')} style={{ width:54,height:54,borderRadius:'50%',background:'linear-gradient(135deg,#7C3AED,#C026D3)',border:'none',display:'flex',alignItems:'center',justifyContent:'center',fontSize:26,cursor:'pointer',boxShadow:'0 4px 20px rgba(124,58,237,0.55)',marginTop:-14 }}>➕</button>
+          : <button key={item.id} onClick={()=>onNav(item.id)} style={{ background:'none',border:'none',display:'flex',flexDirection:'column',alignItems:'center',gap:3,cursor:'pointer',padding:'4px 10px',opacity:active===item.id?1:0.42,transition:'opacity 0.2s' }}>
+              <span style={{ fontSize:22 }}>{item.emoji}</span>
+              <span style={{ fontSize:10,fontWeight:active===item.id?800:500,color:active===item.id?'#A78BFA':'rgba(255,255,255,0.55)' }}>{item.label}</span>
+            </button>
+      ))}
+    </div>
+  );
+};
+
+/* ═══════════════════════════════════════════════════════════
+   APP ROOT
+   ═══════════════════════════════════════════════════════════ */
+const App = () => {
+  // Auth state
+  const [authState, setAuthState] = useState('loading'); // loading | phone | otp | setup | ready
+  const [firebaseUser, setFirebaseUser] = useState(null);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [sentPhone, setSentPhone] = useState('');
+
+  // Navigation
+  const [screen, setScreen]     = useState('home');
+  const [activeEvent, setActiveEvent] = useState(null);
+  const [activeDm, setActiveDm]   = useState(null);
+  const [editingProfile, setEditingProfile] = useState(false);
+
+  // Listen to Firebase auth state
+  useEffect(()=>{
+    if (!IS_CONFIGURED) { setAuthState('ready'); return; }
+    const unsub = auth.onAuthStateChanged(async (fbUser)=>{
+      if (!fbUser) { setAuthState('phone'); return; }
+      setFirebaseUser(fbUser);
+      const profile = await getUser(fbUser.uid);
+      if (!profile) { setAuthState('setup'); return; }
+      setCurrentUser({ id:fbUser.uid, ...profile });
+      setAuthState('ready');
+    });
+    return ()=>unsub();
+  },[]);
+
+  // Watch current user profile for real-time updates
+  useEffect(()=>{
+    if (!firebaseUser?.uid||authState!=='ready') return;
+    const unsub = watchUser(firebaseUser.uid, u=>{ if(u) setCurrentUser(u); });
+    return ()=>unsub();
+  },[firebaseUser?.uid, authState]);
+
+  const navigate = s => { setActiveEvent(null); setActiveDm(null); setEditingProfile(false); setScreen(s); };
+
+  // ── Not configured ──
+  if (!IS_CONFIGURED) return (
+    <div className="app-shell"><SetupScreen/></div>
+  );
+
+  // ── Loading ──
+  if (authState==='loading') return (
+    <div className="app-shell" style={{ alignItems:'center',justifyContent:'center' }}>
+      <div style={{ textAlign:'center' }}>
+        <div style={{ fontSize:48,marginBottom:16,filter:'drop-shadow(0 0 20px rgba(139,92,246,0.6))' }}>⚡</div>
+        <Spinner size={32}/>
+      </div>
+    </div>
+  );
+
+  // ── Auth flows ──
+  if (authState==='phone') return (
+    <div className="app-shell"><ToastProvider><PhoneScreen onCodeSent={phone=>{ setSentPhone(phone); setAuthState('otp'); }}/></ToastProvider></div>
+  );
+  if (authState==='otp') return (
+    <div className="app-shell"><ToastProvider><OTPScreen phone={sentPhone} onVerified={fbUser=>{ setFirebaseUser(fbUser); setAuthState('setup'); }} onBack={()=>setAuthState('phone')}/></ToastProvider></div>
+  );
+  if (authState==='setup') return (
+    <div className="app-shell"><ToastProvider><ProfileSetupScreen firebaseUser={firebaseUser} onComplete={async()=>{ const p=await getUser(firebaseUser.uid); setCurrentUser({id:firebaseUser.uid,...p}); setAuthState('ready'); }}/></ToastProvider></div>
+  );
+
+  // ── Main app ──
+  return (
+    <ToastProvider>
+      <div className="app-shell">
+        {/* DM overlay */}
+        {activeDm && (
+          <div style={{ position:'absolute',inset:0,zIndex:50,background:'#08080F' }}>
+            <DMScreen user={activeDm} currentUser={currentUser} onBack={()=>setActiveDm(null)}/>
+          </div>
+        )}
+
+        {/* Event screen */}
+        {activeEvent && !activeDm && (
+          <div style={{ position:'absolute',inset:0,zIndex:40,background:'#08080F',overflowY:'auto' }}>
+            <EventScreen event={activeEvent} currentUser={currentUser} onBack={()=>setActiveEvent(null)} onDm={u=>setActiveDm(u)}/>
+          </div>
+        )}
+
+        {/* Create screen */}
+        {screen==='create' && !activeEvent && !activeDm && (
+          <div style={{ position:'absolute',inset:0,zIndex:40,background:'#08080F',overflowY:'auto' }}>
+            <CreateScreen currentUser={currentUser} onBack={()=>setScreen('home')} onCreated={()=>{}}/>
+          </div>
+        )}
+
+        {/* Edit profile */}
+        {editingProfile && !activeEvent && !activeDm && screen!=='create' && (
+          <div style={{ position:'absolute',inset:0,zIndex:40,background:'#08080F',overflowY:'auto' }}>
+            <EditProfileScreen currentUser={currentUser} onBack={()=>setEditingProfile(false)} onSaved={()=>setEditingProfile(false)}/>
+          </div>
+        )}
+
+        {/* Main screens */}
+        {!activeEvent && !activeDm && screen!=='create' && !editingProfile && (
+          <>
+            <div className="screen-scroll">
+              {screen==='home'     && <HomeScreen user={currentUser} onOpenEvent={setActiveEvent} onCreateEvent={()=>setScreen('create')} onProfile={()=>setScreen('profile')}/>}
+              {screen==='explore'  && (
+                <div style={{ padding:'56px 20px 20px',textAlign:'center' }}>
+                  <h2 style={{ fontSize:24,fontWeight:900,marginBottom:12 }}>Explore</h2>
+                  <p style={{ color:'rgba(255,255,255,0.4)',fontSize:15 }}>Discover events near you — coming soon!</p>
+                </div>
+              )}
+              {screen==='messages' && <MessagesScreen currentUser={currentUser} onDm={setActiveDm}/>}
+              {screen==='profile'  && <ProfileScreen currentUser={currentUser} onDm={setActiveDm} onEditProfile={()=>setEditingProfile(true)}/>}
+            </div>
+            <BottomNav active={screen} onNav={navigate}/>
+          </>
+        )}
+      </div>
+    </ToastProvider>
+  );
+};
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App/>);
+</script>
+</body>
+</html>
