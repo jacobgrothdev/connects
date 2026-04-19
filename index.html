@@ -1372,6 +1372,227 @@ const EditProfileScreen = ({ currentUser, onBack, onSaved }) => {
 };
 
 /* ═══════════════════════════════════════════════════════════
+   EXPLORE SCREEN
+   ═══════════════════════════════════════════════════════════ */
+
+/* Helper — fetch all events a user has checked into */
+const getUserEvents = async (uid) => {
+  const snap = await db.collectionGroup('attendees').where(firebase.firestore.FieldPath.documentId(), '==', uid).get();
+  const eventIds = snap.docs.map(d => d.ref.parent.parent.id);
+  if (!eventIds.length) return [];
+  const evSnaps = await Promise.all(eventIds.map(id => db.collection('events').doc(id).get()));
+  return evSnaps.filter(d => d.exists).map(d => ({ id: d.id, ...d.data() }));
+};
+
+/* Match score between two users (higher = better match) */
+const matchScore = (me, other) => {
+  if (!me || !other || other.id === me.id) return 0;
+  let score = 0;
+  if (me.industry && other.industry === me.industry) score += 4;
+  const myWords = (me.jobTitle || '').toLowerCase().split(/\W+/).filter(w => w.length > 3);
+  const otherWords = (other.jobTitle || '').toLowerCase().split(/\W+/).filter(w => w.length > 3);
+  myWords.forEach(w => { if (otherWords.includes(w)) score += 2; });
+  return score;
+};
+
+const ExploreScreen = ({ currentUser, onDm }) => {
+  const [allPeople, setAllPeople]     = useState([]);
+  const [loading, setLoading]         = useState(true);
+  const [search, setSearch]           = useState('');
+  const [industryFilter, setIndustryFilter] = useState('All');
+  const [viewUser, setViewUser]       = useState(null);
+
+  const INDUSTRIES = ['All','Fintech','AI/ML','Crypto/Web3','Venture Capital','Design/Tech','Marketing','Music/Entertainment','Healthcare','Real Estate','Other'];
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true);
+      try {
+        // Get all events current user checked into
+        const myEvents = await getUserEvents(currentUser.id);
+        // Get all attendees from those events
+        const attendeeLists = await Promise.all(myEvents.map(ev => getAttendees(ev.id)));
+        const merged = attendeeLists.flat();
+        // Deduplicate by id, exclude self
+        const seen = new Set();
+        const unique = merged.filter(u => {
+          if (!u || u.id === currentUser.id || seen.has(u.id)) return false;
+          seen.add(u.id);
+          return true;
+        });
+        // If not checked into any events, fall back to all users
+        if (unique.length === 0) {
+          const snap = await db.collection('users').limit(60).get();
+          const users = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(u => u.id !== currentUser.id);
+          setAllPeople(users);
+        } else {
+          setAllPeople(unique);
+        }
+      } catch(e) {
+        console.error(e);
+      } finally {
+        setLoading(false);
+      }
+    };
+    if (currentUser?.id) load();
+  }, [currentUser?.id]);
+
+  const scored = allPeople.map(u => ({ ...u, _score: matchScore(currentUser, u) }));
+  const topMatches = [...scored].sort((a,b) => b._score - a._score).filter(u => u._score > 0).slice(0, 6);
+
+  const filtered = scored.filter(u => {
+    const q = search.toLowerCase();
+    const matchesSearch = !q || u.name?.toLowerCase().includes(q) || u.jobTitle?.toLowerCase().includes(q) || u.industry?.toLowerCase().includes(q);
+    const matchesIndustry = industryFilter === 'All' || u.industry === industryFilter;
+    return matchesSearch && matchesIndustry;
+  }).sort((a,b) => b._score - a._score);
+
+  if (viewUser) return (
+    <ExploreProfileView user={viewUser} currentUser={currentUser} onBack={()=>setViewUser(null)} onDm={u=>{setViewUser(null);onDm(u);}}/>
+  );
+
+  return (
+    <div style={{ padding:'52px 0 20px' }}>
+      {/* Header */}
+      <div style={{ padding:'0 20px 16px' }}>
+        <h2 style={{ fontSize:26,fontWeight:900,letterSpacing:-0.5,marginBottom:4 }}>Explore</h2>
+        <p style={{ fontSize:13,color:'rgba(255,255,255,0.38)',marginBottom:16 }}>People at your events</p>
+        {/* Search */}
+        <div style={{ position:'relative',marginBottom:14 }}>
+          <span style={{ position:'absolute',left:14,top:'50%',transform:'translateY(-50%)',fontSize:15,opacity:0.4 }}>🔍</span>
+          <input
+            className="input-field"
+            value={search}
+            onChange={e=>setSearch(e.target.value)}
+            placeholder="Search by name, title, or industry"
+            style={{ paddingLeft:40,fontSize:14 }}
+          />
+        </div>
+        {/* Industry filter pills */}
+        <div style={{ display:'flex',gap:8,overflowX:'auto',paddingBottom:4 }}>
+          {INDUSTRIES.map(ind=>(
+            <button key={ind} onClick={()=>setIndustryFilter(ind)} style={{ padding:'7px 14px',borderRadius:99,fontSize:12,fontWeight:700,flexShrink:0,cursor:'pointer',background:industryFilter===ind?'linear-gradient(135deg,#7C3AED,#C026D3)':'rgba(255,255,255,0.06)',border:`1.5px solid ${industryFilter===ind?'transparent':'rgba(255,255,255,0.08)'}`,color:'#fff',transition:'all 0.2s' }}>
+              {ind}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {loading ? (
+        <div style={{ display:'flex',justifyContent:'center',padding:'60px 0' }}><Spinner size={32}/></div>
+      ) : allPeople.length === 0 ? (
+        <div style={{ textAlign:'center',padding:'60px 20px',color:'rgba(255,255,255,0.35)' }}>
+          <div style={{ fontSize:44,marginBottom:12 }}>🎟️</div>
+          <p style={{ fontWeight:700,marginBottom:6 }}>Check in to an event first</p>
+          <p style={{ fontSize:13,lineHeight:1.6 }}>Once you're checked in, you'll see everyone at the event and who you should connect with.</p>
+        </div>
+      ) : (
+        <>
+          {/* Smart match section — only show when no search/filter active */}
+          {!search && industryFilter==='All' && topMatches.length > 0 && (
+            <div style={{ marginBottom:24 }}>
+              <div style={{ padding:'0 20px',display:'flex',alignItems:'center',gap:8,marginBottom:14 }}>
+                <span style={{ fontSize:18 }}>✨</span>
+                <span style={{ fontWeight:800,fontSize:15 }}>You should meet</span>
+                <span style={{ fontSize:12,color:'rgba(255,255,255,0.35)',fontWeight:600 }}>Based on your industry</span>
+              </div>
+              <div style={{ display:'flex',gap:12,overflowX:'auto',padding:'0 20px',paddingBottom:4 }}>
+                {topMatches.map(u=>(
+                  <SmartMatchCard key={u.id} user={u} currentUser={currentUser} onView={setViewUser} onDm={onDm}/>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* All people */}
+          <div style={{ padding:'0 20px' }}>
+            <p style={{ fontSize:12,fontWeight:700,color:'rgba(255,255,255,0.35)',marginBottom:14,letterSpacing:0.5,textTransform:'uppercase' }}>
+              {search||industryFilter!=='All' ? `${filtered.length} result${filtered.length!==1?'s':''}` : `All people · ${filtered.length}`}
+            </p>
+            {filtered.length === 0 && (
+              <div style={{ textAlign:'center',padding:'40px 0',color:'rgba(255,255,255,0.35)' }}>
+                <div style={{ fontSize:36,marginBottom:10 }}>🤷</div>
+                <p>No one matches that filter yet.</p>
+              </div>
+            )}
+            {filtered.map(u=>(
+              <PeopleRow key={u.id} user={u} currentUser={currentUser} onView={setViewUser} onDm={onDm}/>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
+const SmartMatchCard = ({ user, currentUser, onView, onDm }) => {
+  const reason = user.industry === currentUser?.industry
+    ? `Both in ${user.industry}`
+    : user.jobTitle
+      ? user.jobTitle.split('·')[0].trim()
+      : user.industry || 'Same event';
+  return (
+    <div onClick={()=>onView(user)} className="card-press" style={{ flexShrink:0,width:148,background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.08)',borderRadius:20,padding:'16px 14px',cursor:'pointer' }}>
+      <div style={{ display:'flex',justifyContent:'center',marginBottom:12 }}>
+        <Avatar user={user} size={56} ring/>
+      </div>
+      <p style={{ fontWeight:800,fontSize:14,textAlign:'center',marginBottom:3,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis' }}>{user.name}</p>
+      <p style={{ fontSize:11,color:'rgba(255,255,255,0.4)',textAlign:'center',marginBottom:10,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis' }}>{user.jobTitle||user.industry||''}</p>
+      <div style={{ background:'rgba(139,92,246,0.15)',border:'1px solid rgba(139,92,246,0.3)',borderRadius:8,padding:'5px 8px',marginBottom:10 }}>
+        <p style={{ fontSize:10,fontWeight:700,color:'#A78BFA',textAlign:'center',lineHeight:1.4 }}>✨ {reason}</p>
+      </div>
+      <button onClick={e=>{e.stopPropagation();onDm(user);}} style={{ width:'100%',padding:'8px',borderRadius:10,background:'linear-gradient(135deg,#7C3AED,#C026D3)',border:'none',color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer' }}>
+        DM
+      </button>
+    </div>
+  );
+};
+
+const PeopleRow = ({ user, onView, onDm }) => (
+  <div onClick={()=>onView(user)} className="card-press" style={{ display:'flex',alignItems:'center',gap:13,padding:'13px',background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)',borderRadius:17,marginBottom:10,cursor:'pointer' }}>
+    <Avatar user={user} size={48}/>
+    <div style={{ flex:1,minWidth:0 }}>
+      <div style={{ fontWeight:800,fontSize:15,marginBottom:3 }}>{user.name}</div>
+      <div style={{ fontSize:12,color:'rgba(255,255,255,0.42)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis' }}>{user.jobTitle||''}{user.jobTitle&&user.industry?' · ':''}{user.industry||''}</div>
+    </div>
+    <button onClick={e=>{e.stopPropagation();onDm(user);}} style={{ padding:'8px 14px',borderRadius:99,background:'rgba(139,92,246,0.18)',border:'1px solid rgba(139,92,246,0.35)',color:'#A78BFA',fontSize:12,fontWeight:700,cursor:'pointer',flexShrink:0 }}>
+      DM
+    </button>
+  </div>
+);
+
+const ExploreProfileView = ({ user, currentUser, onBack, onDm }) => (
+  <div style={{ minHeight:'100vh',background:'#08080F' }}>
+    <div style={{ padding:'52px 20px 16px',display:'flex',alignItems:'center',gap:12,borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
+      <button onClick={onBack} style={{ background:'rgba(255,255,255,0.08)',border:'none',borderRadius:'50%',width:38,height:38,color:'#fff',fontSize:18,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center' }}>←</button>
+      <h2 style={{ fontSize:20,fontWeight:900 }}>Profile</h2>
+    </div>
+    <div style={{ padding:'32px 24px 40px',display:'flex',flexDirection:'column',alignItems:'center',textAlign:'center' }}>
+      <Avatar user={user} size={96} ring/>
+      <h2 style={{ fontSize:24,fontWeight:900,marginTop:16,marginBottom:4 }}>{user.name}</h2>
+      {user.jobTitle && <p style={{ color:'rgba(255,255,255,0.55)',fontSize:15,marginBottom:4 }}>{user.jobTitle}</p>}
+      {user.industry && (
+        <span style={{ background:'rgba(139,92,246,0.15)',border:'1px solid rgba(139,92,246,0.3)',borderRadius:99,padding:'4px 12px',fontSize:12,fontWeight:700,color:'#A78BFA',marginBottom:16 }}>{user.industry}</span>
+      )}
+      {user.bio && <p style={{ color:'rgba(255,255,255,0.5)',fontSize:14,lineHeight:1.65,maxWidth:300,marginBottom:20,marginTop:8 }}>{user.bio}</p>}
+      <div style={{ display:'flex',gap:10,marginBottom:28 }}>
+        {user.instagram && (
+          <a href={`https://instagram.com/${user.instagram}`} target="_blank" style={{ padding:'10px 18px',borderRadius:99,background:'rgba(255,255,255,0.07)',border:'1px solid rgba(255,255,255,0.1)',color:'#fff',fontSize:13,fontWeight:700,textDecoration:'none' }}>📸 @{user.instagram}</a>
+        )}
+        {user.tiktok && (
+          <a href={`https://tiktok.com/@${user.tiktok}`} target="_blank" style={{ padding:'10px 18px',borderRadius:99,background:'rgba(255,255,255,0.07)',border:'1px solid rgba(255,255,255,0.1)',color:'#fff',fontSize:13,fontWeight:700,textDecoration:'none' }}>🎵 @{user.tiktok}</a>
+        )}
+      </div>
+      {user.id !== currentUser?.id && (
+        <button onClick={()=>onDm(user)} className="btn-primary" style={{ padding:'14px 40px',borderRadius:99,fontSize:16,border:'none' }}>
+          💬 Send a DM
+        </button>
+      )}
+    </div>
+  </div>
+);
+
+/* ═══════════════════════════════════════════════════════════
    MESSAGES SCREEN
    ═══════════════════════════════════════════════════════════ */
 const MessagesScreen = ({ currentUser, onDm }) => {
@@ -1543,12 +1764,7 @@ const App = () => {
           <>
             <div className="screen-scroll">
               {screen==='home'     && <HomeScreen user={currentUser} onOpenEvent={setActiveEvent} onCreateEvent={()=>setScreen('create')} onProfile={()=>setScreen('profile')}/>}
-              {screen==='explore'  && (
-                <div style={{ padding:'56px 20px 20px',textAlign:'center' }}>
-                  <h2 style={{ fontSize:24,fontWeight:900,marginBottom:12 }}>Explore</h2>
-                  <p style={{ color:'rgba(255,255,255,0.4)',fontSize:15 }}>Discover events near you — coming soon!</p>
-                </div>
-              )}
+              {screen==='explore'  && <ExploreScreen currentUser={currentUser} onDm={setActiveDm}/>}
               {screen==='messages' && <MessagesScreen currentUser={currentUser} onDm={setActiveDm}/>}
               {screen==='profile'  && <ProfileScreen currentUser={currentUser} onDm={setActiveDm} onEditProfile={()=>setEditingProfile(true)}/>}
             </div>
