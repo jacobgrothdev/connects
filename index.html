@@ -224,6 +224,24 @@ const toggleLike = async (eventId, postId, uid, liked) => {
   });
 };
 
+/* ── Stories ── */
+const watchStories = (eventId, cb) =>
+  db.collection('events').doc(eventId).collection('stories')
+    .orderBy('createdAt', 'desc').limit(200)
+    .onSnapshot(snap => {
+      const now = Date.now();
+      const stories = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(s => s.createdAt && (now - s.createdAt.toMillis()) < 24 * 60 * 60 * 1000);
+      cb(stories);
+    });
+
+const addStory = async (eventId, data) => {
+  await db.collection('events').doc(eventId).collection('stories').add({
+    ...data, createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+  });
+};
+
 /* ── DMs ── */
 const dmId = (a, b) => [a, b].sort().join('__');
 
@@ -787,6 +805,194 @@ const HomeScreen = ({ user, onOpenEvent, onCreateEvent, onProfile }) => {
 /* ═══════════════════════════════════════════════════════════
    EVENT SCREEN
    ═══════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════
+   STORIES
+   ═══════════════════════════════════════════════════════════ */
+const StoryViewer = ({ stories, startIndex, currentUser, onClose }) => {
+  const [idx, setIdx] = useState(startIndex || 0);
+  const [progress, setProgress] = useState(0);
+  const timerRef = useRef(null);
+  const DURATION = 5000;
+
+  const story = stories[idx];
+
+  const goNext = useCallback(() => {
+    if (idx < stories.length - 1) { setIdx(i => i + 1); setProgress(0); }
+    else onClose();
+  }, [idx, stories.length, onClose]);
+
+  const goPrev = () => {
+    if (idx > 0) { setIdx(i => i - 1); setProgress(0); }
+  };
+
+  useEffect(() => {
+    setProgress(0);
+    const start = Date.now();
+    const tick = () => {
+      const elapsed = Date.now() - start;
+      const pct = Math.min((elapsed / DURATION) * 100, 100);
+      setProgress(pct);
+      if (pct < 100) timerRef.current = requestAnimationFrame(tick);
+      else goNext();
+    };
+    timerRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(timerRef.current);
+  }, [idx, goNext]);
+
+  const timeAgo = (ts) => {
+    if (!ts) return '';
+    const secs = Math.floor((Date.now() - ts.toMillis()) / 1000);
+    if (secs < 60) return `${secs}s ago`;
+    if (secs < 3600) return `${Math.floor(secs/60)}m ago`;
+    return `${Math.floor(secs/3600)}h ago`;
+  };
+
+  if (!story) return null;
+
+  return (
+    <div style={{ position:'fixed',inset:0,zIndex:200,background:'#000',display:'flex',flexDirection:'column' }}
+      onClick={e => {
+        const x = e.clientX / window.innerWidth;
+        if (x < 0.35) goPrev(); else goNext();
+      }}
+    >
+      {/* Progress bars */}
+      <div style={{ position:'absolute',top:0,left:0,right:0,padding:'12px 10px 0',display:'flex',gap:4,zIndex:10 }}>
+        {stories.map((_, i) => (
+          <div key={i} style={{ flex:1,height:3,borderRadius:99,background:'rgba(255,255,255,0.25)',overflow:'hidden' }}>
+            <div style={{ height:'100%',background:'#fff',width: i < idx ? '100%' : i === idx ? `${progress}%` : '0%',transition: i===idx ? 'none' : undefined, borderRadius:99 }}/>
+          </div>
+        ))}
+      </div>
+
+      {/* Story image */}
+      <img src={story.imageURL} style={{ position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'cover' }} alt="story"/>
+      <div style={{ position:'absolute',inset:0,background:'linear-gradient(to bottom,rgba(0,0,0,0.35) 0%,transparent 30%,transparent 65%,rgba(0,0,0,0.6) 100%)' }}/>
+
+      {/* Header */}
+      <div style={{ position:'absolute',top:0,left:0,right:0,padding:'48px 16px 0',display:'flex',alignItems:'center',gap:10,zIndex:10 }}>
+        <div style={{ display:'flex',alignItems:'center',gap:10,flex:1 }}>
+          <Avatar user={{ id:story.userId, name:story.userName, photoURL:story.userPhoto }} size={36} ring/>
+          <div>
+            <div style={{ fontWeight:800,fontSize:14,color:'#fff' }}>{story.userName}</div>
+            <div style={{ fontSize:11,color:'rgba(255,255,255,0.6)' }}>{timeAgo(story.createdAt)}</div>
+          </div>
+        </div>
+        <button onClick={e=>{e.stopPropagation();onClose();}} style={{ background:'rgba(0,0,0,0.4)',border:'none',borderRadius:'50%',width:34,height:34,color:'#fff',fontSize:16,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center' }}>✕</button>
+      </div>
+
+      {/* Caption */}
+      {story.caption && (
+        <div style={{ position:'absolute',bottom:48,left:16,right:16,zIndex:10 }}>
+          <p style={{ fontSize:15,fontWeight:600,color:'#fff',textShadow:'0 1px 6px rgba(0,0,0,0.7)',lineHeight:1.5 }}>{story.caption}</p>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const StoryRow = ({ eventId, currentUser }) => {
+  const [stories, setStories] = useState([]);
+  const [viewing, setViewing] = useState(null); // { stories, startIndex }
+  const [uploading, setUploading] = useState(false);
+  const addRef = useRef(null);
+  const toast = useToast();
+
+  useEffect(() => {
+    if (!eventId) return;
+    const unsub = watchStories(eventId, setStories);
+    return () => unsub();
+  }, [eventId]);
+
+  // Group stories by user, most recent story per user first
+  const byUser = [];
+  const seen = new Set();
+  [...stories].reverse().forEach(s => {
+    if (!seen.has(s.userId)) {
+      seen.add(s.userId);
+      byUser.push({ userId: s.userId, userName: s.userName, userPhoto: s.userPhoto, stories: stories.filter(x => x.userId === s.userId) });
+    }
+  });
+  // Current user's group first
+  byUser.sort((a,b) => a.userId===currentUser?.id ? -1 : b.userId===currentUser?.id ? 1 : 0);
+
+  const handleAddStory = async (e) => {
+    const file = e.target.files[0];
+    if (!file || !currentUser?.id) return;
+    setUploading(true);
+    try {
+      const imageURL = await uploadFile(`stories/${eventId}/${currentUser.id}_${Date.now()}.jpg`, file);
+      await addStory(eventId, {
+        userId: currentUser.id,
+        userName: currentUser.name,
+        userPhoto: currentUser.photoURL || null,
+        imageURL,
+        caption: '',
+      });
+      toast('Story added! 🎉', 'success');
+    } catch(err) {
+      toast('Failed to upload story', 'error');
+    } finally {
+      setUploading(false);
+      e.target.value = '';
+    }
+  };
+
+  const myGroup = byUser.find(g => g.userId === currentUser?.id);
+
+  return (
+    <>
+      {viewing && (
+        <StoryViewer
+          stories={viewing.stories}
+          startIndex={viewing.startIndex}
+          currentUser={currentUser}
+          onClose={() => setViewing(null)}
+        />
+      )}
+      <input ref={addRef} type="file" accept="image/*" style={{ display:'none' }} onChange={handleAddStory}/>
+
+      <div style={{ display:'flex',gap:14,overflowX:'auto',padding:'4px 0 12px',marginBottom:6 }}>
+        {/* Add your story button */}
+        <div style={{ display:'flex',flexDirection:'column',alignItems:'center',gap:6,flexShrink:0,cursor:'pointer' }}
+          onClick={() => myGroup ? setViewing({ stories: myGroup.stories, startIndex: 0 }) : addRef.current.click()}
+        >
+          <div style={{ position:'relative',width:60,height:60 }}>
+            {myGroup
+              ? <Avatar user={currentUser} size={60} ring/>
+              : <div style={{ width:60,height:60,borderRadius:'50%',background:'rgba(255,255,255,0.07)',border:'2px dashed rgba(139,92,246,0.5)',display:'flex',alignItems:'center',justifyContent:'center' }}>
+                  {uploading ? <Spinner size={22}/> : <span style={{ fontSize:22,lineHeight:1 }}>+</span>}
+                </div>
+            }
+            {myGroup && (
+              <button
+                onClick={e=>{e.stopPropagation();addRef.current.click();}}
+                style={{ position:'absolute',bottom:-2,right:-2,width:22,height:22,borderRadius:'50%',background:'linear-gradient(135deg,#7C3AED,#C026D3)',border:'2px solid #08080F',display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,cursor:'pointer' }}>
+                +
+              </button>
+            )}
+          </div>
+          <span style={{ fontSize:11,color:'rgba(255,255,255,0.5)',fontWeight:600,maxWidth:60,textAlign:'center',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' }}>
+            {myGroup ? 'Your story' : 'Add story'}
+          </span>
+        </div>
+
+        {/* Other users' stories */}
+        {byUser.filter(g => g.userId !== currentUser?.id).map(group => (
+          <div key={group.userId} style={{ display:'flex',flexDirection:'column',alignItems:'center',gap:6,flexShrink:0,cursor:'pointer' }}
+            onClick={() => setViewing({ stories: group.stories, startIndex: 0 })}
+          >
+            <Avatar user={{ id:group.userId, name:group.userName, photoURL:group.userPhoto }} size={60} ring/>
+            <span style={{ fontSize:11,color:'rgba(255,255,255,0.5)',fontWeight:600,maxWidth:60,textAlign:'center',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' }}>
+              {group.userName?.split(' ')[0]}
+            </span>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+};
+
 const EventScreen = ({ event, currentUser, onBack, onDm }) => {
   const [tab, setTab] = useState('feed');
   const [feed, setFeed] = useState([]);
@@ -903,6 +1109,8 @@ const EventScreen = ({ event, currentUser, onBack, onDm }) => {
         {/* FEED */}
         {tab==='feed' && (
           <div className="animate-in">
+            {/* Stories row */}
+            <StoryRow eventId={event.id} currentUser={currentUser}/>
             <div style={{ background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.08)',borderRadius:16,padding:'12px 14px',display:'flex',gap:12,alignItems:'center',marginBottom:14 }}>
               <Avatar user={currentUser} size={36}/>
               <input value={postText} onChange={e=>setPostText(e.target.value)} onKeyDown={e=>e.key==='Enter'&&doPost()} placeholder="Share a shoutout to the room..." style={{ flex:1,background:'none',border:'none',color:'#fff',fontSize:14,padding:0 }}/>
