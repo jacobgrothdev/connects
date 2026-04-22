@@ -1300,10 +1300,10 @@ const EventScreen = ({ event, currentUser, onBack, onDm, onViewProfile }) => {
                   {item.photoURL&&<img src={item.photoURL} style={{ width:'100%',maxHeight:300,objectFit:'cover',display:'block' }}/>}
                   <div style={{ padding:'12px 14px' }}>
                     <div style={{ display:'flex',alignItems:'center',gap:10,marginBottom:8 }}>
-                      <div onClick={()=>item.userId!==currentUser?.id&&onViewProfile&&onViewProfile(item.userId)} style={{ cursor:item.userId!==currentUser?.id?'pointer':'default' }}>
+                      <div onClick={()=>onViewProfile&&onViewProfile(item.userId)} style={{ cursor:'pointer' }}>
                         <Avatar user={{ id:item.userId,name:item.userName,photoURL:item.userPhoto }} size={36} online/>
                       </div>
-                      <div onClick={()=>item.userId!==currentUser?.id&&onViewProfile&&onViewProfile(item.userId)} style={{ flex:1,minWidth:0,cursor:item.userId!==currentUser?.id?'pointer':'default' }}>
+                      <div onClick={()=>onViewProfile&&onViewProfile(item.userId)} style={{ flex:1,minWidth:0,cursor:'pointer' }}>
                         <div style={{ display:'flex',alignItems:'center',gap:7,marginBottom:1 }}>
                           <span style={{ fontWeight:800,fontSize:14 }}>{item.userName}</span>
                           {item.type==='arrived'&&<Chip label="arrived ✓" bg="rgba(16,185,129,0.14)" color="#34D399"/>}
@@ -1328,7 +1328,7 @@ const EventScreen = ({ event, currentUser, onBack, onDm, onViewProfile }) => {
           <div className="animate-in">
             <div style={{ fontSize:13,color:'rgba(255,255,255,0.38)',marginBottom:16,fontWeight:600 }}>{attendees.length} checked in</div>
             {attendees.map(u=>(
-              <div key={u.id} onClick={()=>u.id!==currentUser?.id&&onViewProfile&&onViewProfile(u.id)} className="card-press" style={{ marginBottom:10,background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)',borderRadius:17,padding:'13px 14px',display:'flex',alignItems:'center',gap:13,cursor:u.id!==currentUser?.id?'pointer':'default' }}>
+              <div key={u.id} onClick={()=>onViewProfile&&onViewProfile(u.id)} className="card-press" style={{ marginBottom:10,background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)',borderRadius:17,padding:'13px 14px',display:'flex',alignItems:'center',gap:13,cursor:'pointer' }}>
                 <Avatar user={u} size={48} online/>
                 <div style={{ flex:1,minWidth:0 }}>
                   <div style={{ fontWeight:800,fontSize:15,marginBottom:2 }}>{u.name}{u.id===currentUser?.id&&<span style={{ marginLeft:7,fontSize:11,color:'#A78BFA',fontWeight:700 }}>You</span>}</div>
@@ -2359,7 +2359,7 @@ const App = () => {
   const [editingProfile, setEditingProfile] = useState(false);
   const [viewingUserId, setViewingUserId] = useState(null);
 
-  const viewProfile = (uid) => { if (uid && uid !== currentUser?.id) setViewingUserId(uid); };
+  const viewProfile = (uid) => { if (uid) setViewingUserId(uid); };
 
   // Listen to Firebase auth state
   useEffect(()=>{
@@ -2392,7 +2392,7 @@ const App = () => {
     return ()=>unsub();
   },[firebaseUser?.uid, authState]);
 
-  const navigate = s => { setActiveEvent(null); setActiveDm(null); setEditingProfile(false); setScreen(s); };
+  const navigate = s => { setActiveEvent(null); setActiveDm(null); setEditingProfile(false); setViewingUserId(null); setScreen(s); };
 
   // ── Not configured ──
   if (!IS_CONFIGURED) return (
@@ -2445,9 +2445,9 @@ const App = () => {
         )}
 
         {/* Event screen */}
-        {activeEvent && !activeDm && !viewingUserId && (
+        {activeEvent && !activeDm && (
           <div style={{ position:'absolute',inset:0,zIndex:40,background:'#08080F',overflowY:'auto' }}>
-            <EventScreen event={activeEvent} currentUser={currentUser} onBack={()=>setActiveEvent(null)} onDm={u=>setActiveDm(u)} onViewProfile={viewProfile}/>
+            <EventScreen event={activeEvent} currentUser={currentUser} onBack={()=>{ setActiveEvent(null); setViewingUserId(null); }} onDm={u=>setActiveDm(u)} onViewProfile={viewProfile}/>
           </div>
         )}
 
