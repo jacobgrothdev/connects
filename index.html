@@ -1062,6 +1062,9 @@ const EventScreen = ({ event, currentUser, onBack, onDm, onViewProfile }) => {
   const [announcementText, setAnnouncementText] = useState('');
   const [followed, setFollowed]           = useState({});
   const [followLoading, setFollowLoading] = useState({});
+  const [editingEvent, setEditingEvent]   = useState(false);
+  const [showRSVPModal, setShowRSVPModal] = useState(false);
+  const [rsvpMessage, setRsvpMessage]     = useState('');
   const toast  = useToast();
   const postPhotoRef = useRef(null);
 
@@ -1114,14 +1117,16 @@ const EventScreen = ({ event, currentUser, onBack, onDm, onViewProfile }) => {
     } catch(e) { toast('Check-in failed','error'); }
   };
 
-  const doRequestRSVP = async () => {
+  const doRequestRSVP = async (msg='') => {
     if (!currentUser?.id) return;
     try {
       await requestToAttend(event.id, currentUser.id, {
         name:currentUser.name, jobTitle:currentUser.jobTitle||'', industry:currentUser.industry||'',
         instagram:currentUser.instagram||'', tiktok:currentUser.tiktok||'', photoURL:currentUser.photoURL||null,
+        message: msg.trim(),
       });
-      setGuestStatus('pending'); toast('Request sent! The host will review it.','success');
+      setGuestStatus('pending'); setShowRSVPModal(false); setRsvpMessage('');
+      toast('Request sent! The host will review it.','success');
     } catch(e) { toast('Failed to send request','error'); }
   };
 
@@ -1192,7 +1197,7 @@ const EventScreen = ({ event, currentUser, onBack, onDm, onViewProfile }) => {
       </div>
     );
     if (!isPrivate||isHost) return <button onClick={doCheckIn} className="btn-primary" style={{ padding:'11px 22px',borderRadius:99,fontSize:14,border:'none' }}>Check In ✓</button>;
-    if (guestStatus===null) return <button onClick={doRequestRSVP} className="btn-primary" style={{ padding:'11px 22px',borderRadius:99,fontSize:14,border:'none' }}>Request to Attend</button>;
+    if (guestStatus===null) return <button onClick={()=>setShowRSVPModal(true)} className="btn-primary" style={{ padding:'11px 22px',borderRadius:99,fontSize:14,border:'none' }}>Request to Attend</button>;
     if (guestStatus==='pending') return (
       <div style={{ background:'rgba(245,158,11,0.12)',border:'1px solid rgba(245,158,11,0.3)',borderRadius:13,padding:'10px 14px',display:'flex',alignItems:'center',gap:10 }}>
         <span>⏳</span><div style={{ fontSize:13,fontWeight:700,color:'#FCD34D' }}>Request pending host approval</div>
@@ -1419,6 +1424,15 @@ const EventScreen = ({ event, currentUser, onBack, onDm, onViewProfile }) => {
         {tab==='manage' && isHost && (
           <div className="animate-in" style={{ paddingBottom:40 }}>
 
+            {/* Edit Event */}
+            <div style={{ marginBottom:24 }}>
+              <button onClick={()=>setEditingEvent(true)} style={{ width:'100%',padding:'14px',borderRadius:16,background:'rgba(139,92,246,0.12)',border:'1.5px solid rgba(139,92,246,0.35)',color:'#A78BFA',fontSize:15,fontWeight:800,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:10 }}>
+                ✏️ Edit Event Details
+              </button>
+            </div>
+
+            <div style={{ height:1,background:'rgba(255,255,255,0.07)',marginBottom:24 }}/>
+
             {/* Announcement composer */}
             <div style={{ marginBottom:24 }}>
               <h3 style={{ fontSize:17,fontWeight:900,marginBottom:4 }}>📢 Send Announcement</h3>
@@ -1473,8 +1487,15 @@ const EventScreen = ({ event, currentUser, onBack, onDm, onViewProfile }) => {
                       <div style={{ flex:1,minWidth:0 }}>
                         <div style={{ fontWeight:800,fontSize:15 }}>{g.name}</div>
                         <div style={{ fontSize:12,color:'rgba(255,255,255,0.45)' }}>{g.jobTitle}{g.jobTitle&&g.industry?' · ':''}{g.industry}</div>
+                        {g.instagram&&<div style={{ fontSize:11,color:'#F9A8D4',marginTop:2 }}>📸 @{g.instagram}</div>}
                       </div>
                     </div>
+                    {g.message ? (
+                      <div style={{ background:'rgba(139,92,246,0.08)',border:'1px solid rgba(139,92,246,0.2)',borderRadius:10,padding:'10px 12px',marginBottom:10 }}>
+                        <div style={{ fontSize:11,fontWeight:700,color:'#A78BFA',marginBottom:4,letterSpacing:0.5,textTransform:'uppercase' }}>Their note</div>
+                        <div style={{ fontSize:13,color:'rgba(255,255,255,0.78)',lineHeight:1.55 }}>{g.message}</div>
+                      </div>
+                    ) : null}
                     <div style={{ display:'flex',gap:8 }}>
                       <button onClick={()=>doUpdateGuest(g.id,'approved')} style={{ flex:1,padding:'9px',borderRadius:10,background:'rgba(16,185,129,0.18)',border:'1px solid rgba(16,185,129,0.35)',color:'#10B981',fontSize:13,fontWeight:700,cursor:'pointer' }}>✓ Approve</button>
                       <button onClick={()=>doUpdateGuest(g.id,'waitlisted')} style={{ flex:1,padding:'9px',borderRadius:10,background:'rgba(59,130,246,0.14)',border:'1px solid rgba(59,130,246,0.3)',color:'#93C5FD',fontSize:13,fontWeight:700,cursor:'pointer' }}>📋 Waitlist</button>
@@ -1523,6 +1544,42 @@ const EventScreen = ({ event, currentUser, onBack, onDm, onViewProfile }) => {
           </div>
         )}
       </div>
+
+      {/* ── RSVP Message Modal ── */}
+      {showRSVPModal && (
+        <div style={{ position:'absolute',inset:0,zIndex:60,background:'rgba(0,0,0,0.7)',display:'flex',alignItems:'flex-end' }} onClick={()=>setShowRSVPModal(false)}>
+          <div style={{ width:'100%',background:'#111118',borderRadius:'24px 24px 0 0',padding:'24px 20px 40px' }} onClick={e=>e.stopPropagation()}>
+            <div style={{ width:40,height:4,background:'rgba(255,255,255,0.18)',borderRadius:99,margin:'0 auto 22px' }}/>
+            <h3 style={{ fontSize:20,fontWeight:900,marginBottom:6 }}>Request to Attend</h3>
+            <p style={{ fontSize:13,color:'rgba(255,255,255,0.45)',marginBottom:18,lineHeight:1.55 }}>Introduce yourself to the host. Tell them who you are and why you'd like to come.</p>
+            <textarea
+              value={rsvpMessage}
+              onChange={e=>setRsvpMessage(e.target.value)}
+              placeholder={`Hi! I'm ${currentUser?.name||'...'} — ${currentUser?.jobTitle||'tell them what you do'} and I'd love to connect at this event...`}
+              rows={4}
+              className="input-field"
+              style={{ lineHeight:1.6,marginBottom:16,fontSize:14 }}
+              autoFocus
+            />
+            <div style={{ display:'flex',gap:10 }}>
+              <button onClick={()=>setShowRSVPModal(false)} style={{ flex:1,padding:'14px',borderRadius:14,background:'rgba(255,255,255,0.07)',border:'1px solid rgba(255,255,255,0.1)',color:'#fff',fontSize:15,fontWeight:700,cursor:'pointer' }}>Cancel</button>
+              <button onClick={()=>doRequestRSVP(rsvpMessage)} className="btn-primary" style={{ flex:2,padding:'14px',borderRadius:14,fontSize:15,border:'none' }}>
+                Send Request ✓
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Edit Event Panel ── */}
+      {editingEvent && isHost && (
+        <EditEventPanel
+          event={event}
+          onClose={()=>setEditingEvent(false)}
+          onSaved={(updated)=>{ toast('Event updated! ✓','success'); setEditingEvent(false); Object.assign(event,updated); }}
+          toast={toast}
+        />
+      )}
     </div>
   );
 };
@@ -1596,6 +1653,133 @@ const DMScreen = ({ user, currentUser, onBack }) => {
 /* ═══════════════════════════════════════════════════════════
    CREATE EVENT SCREEN
    ═══════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════
+   EDIT EVENT PANEL
+   ═══════════════════════════════════════════════════════════ */
+const EditEventPanel = ({ event, onClose, onSaved, toast }) => {
+  const GRADIENTS = ['linear-gradient(135deg,#3B0764,#7C3AED)','linear-gradient(135deg,#052e16,#065F46)','linear-gradient(135deg,#431407,#9D174D)','linear-gradient(135deg,#0c2461,#1e3799)','linear-gradient(135deg,#1a1a2e,#16213e)'];
+  const EMOJIS = ['🔥','🎭','🍸','🎶','🤝','🚀','🎨','💡','🌆','🎉'];
+
+  // Parse existing date/time from stored string "YYYY-MM-DD · HH:MM"
+  const parseDateTime = (str='') => {
+    const parts = str.split(' · ');
+    return { date: parts[0]||'', time: parts[1]||'' };
+  };
+  const existing = parseDateTime(event.timeRange||event.time||'');
+
+  const [form, setForm] = useState({
+    name: event.name||'',
+    location: event.location||'',
+    date: existing.date,
+    time: existing.time,
+    description: event.description||'',
+    emoji: event.emoji||'🔥',
+    privacy: event.privacy||'invite',
+  });
+  const initGradIdx = GRADIENTS.indexOf(event.gradient);
+  const [gradIdx, setGradIdx]   = useState(initGradIdx >= 0 ? initGradIdx : 0);
+  const [flyerFile, setFlyerFile]     = useState(null);
+  const [flyerPreview, setFlyerPreview] = useState(event.flyerURL||null);
+  const [loading, setLoading]         = useState(false);
+  const flyerRef = useRef(null);
+
+  const set = k => e => setForm(f=>({...f,[k]:e.target.value}));
+
+  const save = async () => {
+    if (!form.name.trim()) return toast('Event name is required','error');
+    if (!form.location.trim()) return toast('Location is required','error');
+    setLoading(true);
+    try {
+      let flyerURL = event.flyerURL||null;
+      if (flyerFile) {
+        flyerURL = await uploadFile(`flyers/${event.id}/flyer_${Date.now()}.jpg`, flyerFile);
+      }
+      const timeStr = form.date && form.time ? `${form.date} · ${form.time}` : form.date || form.time || '';
+      const updates = {
+        name: form.name.trim(),
+        location: form.location.trim(),
+        description: form.description.trim(),
+        time: timeStr,
+        timeRange: timeStr,
+        privacy: form.privacy,
+        emoji: form.emoji,
+        gradient: GRADIENTS[gradIdx],
+        flyerURL,
+      };
+      await updateEvent(event.id, updates);
+      onSaved(updates);
+    } catch(e) { toast(e.message||'Failed to save','error'); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <div style={{ position:'absolute',inset:0,zIndex:55,background:'#08080F',overflowY:'auto' }}>
+      {/* Header */}
+      <div style={{ padding:'52px 20px 16px',display:'flex',alignItems:'center',gap:12,borderBottom:'1px solid rgba(255,255,255,0.06)',position:'sticky',top:0,background:'#08080F',zIndex:10 }}>
+        <button onClick={onClose} style={{ background:'rgba(255,255,255,0.08)',border:'none',borderRadius:'50%',width:38,height:38,color:'#fff',fontSize:18,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0 }}>←</button>
+        <h2 style={{ fontSize:22,fontWeight:900,letterSpacing:-0.3 }}>Edit Event</h2>
+      </div>
+
+      <div style={{ padding:'22px 20px 60px' }}>
+        {/* Hidden file input */}
+        <input ref={flyerRef} type="file" accept="image/*" style={{ display:'none' }} onChange={e=>{ const f=e.target.files[0]; if(!f)return; setFlyerFile(f); const r=new FileReader(); r.onload=ev=>setFlyerPreview(ev.target.result); r.readAsDataURL(f); }}/>
+
+        {/* Flyer / cover */}
+        <button onClick={()=>flyerRef.current.click()} style={{ width:'100%',borderRadius:22,background:flyerPreview?'transparent':GRADIENTS[gradIdx],height:160,display:'flex',alignItems:'center',justifyContent:'center',border:`2px dashed rgba(255,255,255,${flyerPreview?0:0.2})`,marginBottom:12,overflow:'hidden',position:'relative',cursor:'pointer' }}>
+          {flyerPreview
+            ? <><img src={flyerPreview} style={{ width:'100%',height:'100%',objectFit:'cover' }}/><div style={{ position:'absolute',inset:0,background:'rgba(0,0,0,0.35)',display:'flex',alignItems:'center',justifyContent:'center' }}><span style={{ fontSize:13,fontWeight:700,color:'#fff',background:'rgba(0,0,0,0.5)',padding:'6px 14px',borderRadius:99 }}>📷 Change Photo</span></div></>
+            : <div style={{ textAlign:'center' }}><div style={{ fontSize:36,marginBottom:6 }}>{form.emoji}</div><div style={{ fontSize:13,color:'rgba(255,255,255,0.5)',fontWeight:600 }}>Tap to upload flyer</div></div>
+          }
+        </button>
+        {flyerPreview && <button onClick={()=>{ setFlyerFile(null); setFlyerPreview(null); }} style={{ background:'none',color:'rgba(255,100,100,0.7)',fontSize:13,fontWeight:700,marginBottom:10,cursor:'pointer',border:'none' }}>✕ Remove flyer</button>}
+
+        {/* Gradient & emoji (only without flyer) */}
+        {!flyerPreview && (
+          <>
+            <div style={{ display:'flex',gap:8,marginBottom:12,overflowX:'auto' }}>
+              {GRADIENTS.map((g,i)=>(
+                <button key={i} onClick={()=>setGradIdx(i)} style={{ width:36,height:36,borderRadius:10,background:g,border:`2px solid ${gradIdx===i?'white':'transparent'}`,flexShrink:0,cursor:'pointer' }}/>
+              ))}
+            </div>
+            <div style={{ display:'flex',gap:8,marginBottom:18,overflowX:'auto' }}>
+              {EMOJIS.map(e=>(
+                <button key={e} onClick={()=>setForm(f=>({...f,emoji:e}))} style={{ width:38,height:38,borderRadius:10,background:form.emoji===e?'rgba(139,92,246,0.3)':'rgba(255,255,255,0.06)',border:`1.5px solid ${form.emoji===e?'rgba(139,92,246,0.6)':'rgba(255,255,255,0.08)'}`,fontSize:20,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center' }}>{e}</button>
+              ))}
+            </div>
+          </>
+        )}
+
+        <label className="input-label">Event Name</label>
+        <input className="input-field" value={form.name} onChange={set('name')} placeholder="Event name" style={{ marginBottom:14 }}/>
+
+        <label className="input-label">Location</label>
+        <input className="input-field" value={form.location} onChange={set('location')} placeholder="e.g. Soho House, NYC" style={{ marginBottom:14 }}/>
+
+        <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:14 }}>
+          <div><label className="input-label">Date</label><input type="date" className="input-field" value={form.date} onChange={set('date')}/></div>
+          <div><label className="input-label">Time</label><input type="time" className="input-field" value={form.time} onChange={set('time')}/></div>
+        </div>
+
+        <label className="input-label">Who can join?</label>
+        <div style={{ display:'flex',gap:10,marginBottom:14 }}>
+          {[{id:'invite',label:'🔒 Invite Only'},{id:'open',label:'🌐 Open'}].map(o=>(
+            <button key={o.id} onClick={()=>setForm(f=>({...f,privacy:o.id}))} style={{ flex:1,padding:'12px',borderRadius:13,fontSize:14,fontWeight:700,cursor:'pointer',background:form.privacy===o.id?'linear-gradient(135deg,#6D28D9,#9D174D)':'rgba(255,255,255,0.05)',border:`1.5px solid ${form.privacy===o.id?'transparent':'rgba(255,255,255,0.09)'}`,color:'#fff',boxShadow:form.privacy===o.id?'0 4px 16px rgba(109,40,217,0.35)':'none' }}>
+              {o.label}
+            </button>
+          ))}
+        </div>
+
+        <label className="input-label">About this Event</label>
+        <textarea className="input-field" value={form.description} onChange={set('description')} placeholder="What's this event about? Who should come? What to expect..." rows={4} style={{ lineHeight:1.55,marginBottom:24 }}/>
+
+        <button onClick={save} disabled={loading} className="btn-primary" style={{ width:'100%',padding:16,borderRadius:16,fontSize:17,border:'none',display:'flex',alignItems:'center',justifyContent:'center',gap:10 }}>
+          {loading?<><Spinner size={20}/> Saving...</>:'Save Changes ✓'}
+        </button>
+      </div>
+    </div>
+  );
+};
+
 const CreateScreen = ({ currentUser, onBack, onCreated }) => {
   const [form, setForm] = useState({ name:'',location:'',date:'',time:'',privacy:'invite',description:'',emoji:'🔥' });
   const [flyerFile, setFlyerFile] = useState(null);
