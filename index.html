@@ -197,6 +197,13 @@ const getFollowing = async (myUid) => {
   return new Set(snap.docs.map(d => d.id));
 };
 
+const getMutuals = async (myUid, theirUid) => {
+  const [mine, theirs] = await Promise.all([getFollowing(myUid), getFollowing(theirUid)]);
+  const mutualIds = [...mine].filter(id => theirs.has(id) && id !== theirUid && id !== myUid);
+  const profiles = await Promise.all(mutualIds.slice(0, 8).map(getUser));
+  return profiles.filter(Boolean);
+};
+
 /* ── Events ── */
 const getEvents = async () => {
   const snap = await db.collection('events').orderBy('createdAt', 'desc').get();
@@ -215,6 +222,10 @@ const checkIn = async (eventId, uid) => {
     checkedIn: true, checkedInAt: firebase.firestore.FieldValue.serverTimestamp(),
   });
   await db.collection('events').doc(eventId).update({ checkedInCount: firebase.firestore.FieldValue.increment(1) });
+  // Track attended events on user profile for shared-event lookups
+  await db.collection('users').doc(uid).update({
+    attendedEventIds: firebase.firestore.FieldValue.arrayUnion(eventId),
+  });
 };
 
 const getAttendees = async (eventId) => {
@@ -1037,7 +1048,7 @@ const StoryRow = ({ eventId, currentUser }) => {
   );
 };
 
-const EventScreen = ({ event, currentUser, onBack, onDm }) => {
+const EventScreen = ({ event, currentUser, onBack, onDm, onViewProfile }) => {
   const [tab, setTab]                     = useState('feed');
   const [feed, setFeed]                   = useState([]);
   const [attendees, setAttendees]         = useState([]);
@@ -1289,8 +1300,10 @@ const EventScreen = ({ event, currentUser, onBack, onDm }) => {
                   {item.photoURL&&<img src={item.photoURL} style={{ width:'100%',maxHeight:300,objectFit:'cover',display:'block' }}/>}
                   <div style={{ padding:'12px 14px' }}>
                     <div style={{ display:'flex',alignItems:'center',gap:10,marginBottom:8 }}>
-                      <Avatar user={{ id:item.userId,name:item.userName,photoURL:item.userPhoto }} size={36} online/>
-                      <div style={{ flex:1,minWidth:0 }}>
+                      <div onClick={()=>item.userId!==currentUser?.id&&onViewProfile&&onViewProfile(item.userId)} style={{ cursor:item.userId!==currentUser?.id?'pointer':'default' }}>
+                        <Avatar user={{ id:item.userId,name:item.userName,photoURL:item.userPhoto }} size={36} online/>
+                      </div>
+                      <div onClick={()=>item.userId!==currentUser?.id&&onViewProfile&&onViewProfile(item.userId)} style={{ flex:1,minWidth:0,cursor:item.userId!==currentUser?.id?'pointer':'default' }}>
                         <div style={{ display:'flex',alignItems:'center',gap:7,marginBottom:1 }}>
                           <span style={{ fontWeight:800,fontSize:14 }}>{item.userName}</span>
                           {item.type==='arrived'&&<Chip label="arrived ✓" bg="rgba(16,185,129,0.14)" color="#34D399"/>}
@@ -1315,7 +1328,7 @@ const EventScreen = ({ event, currentUser, onBack, onDm }) => {
           <div className="animate-in">
             <div style={{ fontSize:13,color:'rgba(255,255,255,0.38)',marginBottom:16,fontWeight:600 }}>{attendees.length} checked in</div>
             {attendees.map(u=>(
-              <div key={u.id} style={{ marginBottom:10,background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)',borderRadius:17,padding:'13px 14px',display:'flex',alignItems:'center',gap:13 }}>
+              <div key={u.id} onClick={()=>u.id!==currentUser?.id&&onViewProfile&&onViewProfile(u.id)} className="card-press" style={{ marginBottom:10,background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)',borderRadius:17,padding:'13px 14px',display:'flex',alignItems:'center',gap:13,cursor:u.id!==currentUser?.id?'pointer':'default' }}>
                 <Avatar user={u} size={48} online/>
                 <div style={{ flex:1,minWidth:0 }}>
                   <div style={{ fontWeight:800,fontSize:15,marginBottom:2 }}>{u.name}{u.id===currentUser?.id&&<span style={{ marginLeft:7,fontSize:11,color:'#A78BFA',fontWeight:700 }}>You</span>}</div>
@@ -1325,7 +1338,7 @@ const EventScreen = ({ event, currentUser, onBack, onDm }) => {
                     {u.tiktok&&<Chip label={`🎵 @${u.tiktok}`} bg="rgba(255,255,255,0.06)" color="rgba(255,255,255,0.6)"/>}
                   </div>
                 </div>
-                {u.id!==currentUser?.id&&<button onClick={()=>onDm(u)} style={{ background:'rgba(255,255,255,0.08)',border:'1px solid rgba(255,255,255,0.1)',borderRadius:99,padding:'8px 14px',color:'#fff',fontSize:13,fontWeight:700,cursor:'pointer',flexShrink:0,whiteSpace:'nowrap' }}>👋 Hi</button>}
+                {u.id!==currentUser?.id&&<button onClick={e=>{e.stopPropagation();onDm(u);}} style={{ background:'rgba(255,255,255,0.08)',border:'1px solid rgba(255,255,255,0.1)',borderRadius:99,padding:'8px 14px',color:'#fff',fontSize:13,fontWeight:700,cursor:'pointer',flexShrink:0,whiteSpace:'nowrap' }}>👋 Hi</button>}
               </div>
             ))}
             {attendees.length===0&&<div style={{ textAlign:'center',padding:'40px 0',color:'rgba(255,255,255,0.3)',fontSize:14 }}>No one checked in yet. Be first!</div>}
@@ -1346,7 +1359,7 @@ const EventScreen = ({ event, currentUser, onBack, onDm }) => {
                   <div style={{ background:colorFor(rec.user.id),borderRadius:99,padding:'3px 12px',fontSize:13,fontWeight:900 }}>{rec.score}% match</div>
                 </div>
                 <div style={{ padding:'16px' }}>
-                  <div style={{ display:'flex',gap:14,marginBottom:14 }}>
+                  <div onClick={()=>onViewProfile&&onViewProfile(rec.user.id)} style={{ display:'flex',gap:14,marginBottom:14,cursor:'pointer' }}>
                     <Avatar user={rec.user} size={52} online/>
                     <div style={{ flex:1 }}>
                       <div style={{ fontWeight:900,fontSize:17,letterSpacing:-0.3,marginBottom:3 }}>{rec.user.name}</div>
@@ -1866,6 +1879,173 @@ const EditProfileScreen = ({ currentUser, onBack, onSaved }) => {
 };
 
 /* ═══════════════════════════════════════════════════════════
+   USER PROFILE SCREEN
+   ═══════════════════════════════════════════════════════════ */
+const UserProfileScreen = ({ userId, currentUser, onBack, onDm, onViewProfile }) => {
+  const [profile, setProfile]           = useState(null);
+  const [isFollowing, setIsFollowing]   = useState(false);
+  const [followLoading, setFollowLoading] = useState(false);
+  const [mutuals, setMutuals]           = useState([]);
+  const [sharedEvents, setSharedEvents] = useState([]);
+  const [loading, setLoading]           = useState(true);
+  const toast = useToast();
+  const isMe = userId === currentUser?.id;
+
+  useEffect(() => {
+    if (!userId || !currentUser?.id) return;
+    setLoading(true);
+    const load = async () => {
+      try {
+        const [userProfile, myFollowing] = await Promise.all([
+          getUser(userId),
+          getFollowing(currentUser.id),
+        ]);
+        setProfile(userProfile);
+        setIsFollowing(myFollowing.has(userId));
+
+        if (!isMe) {
+          // Mutuals: people we both follow
+          const mutualsData = await getMutuals(currentUser.id, userId);
+          setMutuals(mutualsData);
+
+          // Events together: intersection of attendedEventIds arrays
+          const myIds   = new Set(currentUser.attendedEventIds || []);
+          const theirIds = userProfile?.attendedEventIds || [];
+          const sharedIds = theirIds.filter(id => myIds.has(id));
+          if (sharedIds.length) {
+            const evSnaps = await Promise.all(sharedIds.slice(0, 6).map(id => db.collection('events').doc(id).get()));
+            setSharedEvents(evSnaps.filter(d => d.exists).map(d => ({ id: d.id, ...d.data() })));
+          }
+        }
+      } catch(e) { console.error(e); }
+      finally { setLoading(false); }
+    };
+    load();
+  }, [userId]);
+
+  const toggleFollow = async () => {
+    if (!currentUser?.id || isMe) return;
+    setFollowLoading(true);
+    try {
+      if (isFollowing) {
+        await unfollowUser(currentUser.id, userId);
+        setIsFollowing(false);
+        setProfile(p => ({ ...p, followers: Math.max(0, (p.followers||1) - 1) }));
+      } else {
+        await followUser(currentUser.id, userId);
+        setIsFollowing(true);
+        setProfile(p => ({ ...p, followers: (p.followers||0) + 1 }));
+      }
+    } catch(e) { toast('Something went wrong', 'error'); }
+    finally { setFollowLoading(false); }
+  };
+
+  return (
+    <div style={{ minHeight:'100vh', background:'#08080F' }}>
+      {/* Header */}
+      <div style={{ padding:'52px 20px 14px', display:'flex', alignItems:'center', gap:12, borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
+        <button onClick={onBack} style={{ background:'rgba(255,255,255,0.08)',border:'none',borderRadius:'50%',width:38,height:38,color:'#fff',fontSize:18,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0 }}>←</button>
+        <h2 style={{ fontSize:20,fontWeight:900 }}>Profile</h2>
+      </div>
+
+      {loading ? (
+        <div style={{ display:'flex',justifyContent:'center',padding:'80px 0' }}><Spinner size={32}/></div>
+      ) : !profile ? (
+        <div style={{ textAlign:'center',padding:'60px 20px',color:'rgba(255,255,255,0.4)' }}>Profile not found</div>
+      ) : (
+        <div style={{ padding:'28px 20px 48px' }}>
+
+          {/* Avatar + name */}
+          <div style={{ display:'flex',flexDirection:'column',alignItems:'center',textAlign:'center',marginBottom:24 }}>
+            <Avatar user={profile} size={100} ring/>
+            <h2 style={{ fontSize:26,fontWeight:900,marginTop:14,marginBottom:4,letterSpacing:-0.5 }}>{profile.name}</h2>
+            {profile.jobTitle && <p style={{ color:'rgba(255,255,255,0.55)',fontSize:15,marginBottom:8 }}>{profile.jobTitle}</p>}
+            {profile.industry && <span style={{ background:'rgba(139,92,246,0.15)',border:'1px solid rgba(139,92,246,0.3)',borderRadius:99,padding:'4px 14px',fontSize:12,fontWeight:700,color:'#A78BFA',display:'inline-block',marginBottom:12 }}>{profile.industry}</span>}
+            {profile.bio && <p style={{ color:'rgba(255,255,255,0.48)',fontSize:14,lineHeight:1.65,maxWidth:300,marginBottom:14 }}>{profile.bio}</p>}
+
+            {/* Stats */}
+            <div style={{ display:'flex',gap:28,marginBottom:20 }}>
+              {[['Followers', fmt(profile.followers)],['Following', fmt(profile.following)]].map(([label,val])=>(
+                <div key={label} style={{ textAlign:'center' }}>
+                  <div style={{ fontSize:20,fontWeight:900 }}>{val}</div>
+                  <div style={{ fontSize:12,color:'rgba(255,255,255,0.4)',fontWeight:600 }}>{label}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Action buttons */}
+            {!isMe && (
+              <div style={{ display:'flex',gap:10,width:'100%',maxWidth:280 }}>
+                <button
+                  onClick={toggleFollow}
+                  disabled={followLoading}
+                  className={isFollowing ? '' : 'btn-primary'}
+                  style={{ flex:1,padding:'12px',borderRadius:14,fontSize:14,fontWeight:800,border:'none',cursor:'pointer',background:isFollowing?'rgba(139,92,246,0.18)':undefined,color:isFollowing?'#A78BFA':'#fff',display:'flex',alignItems:'center',justifyContent:'center',gap:6 }}>
+                  {followLoading ? <Spinner size={16}/> : isFollowing ? '✓ Following' : 'Follow +'}
+                </button>
+                <button onClick={()=>onDm(profile)} style={{ flex:1,padding:'12px',borderRadius:14,fontSize:14,fontWeight:800,background:'rgba(255,255,255,0.08)',border:'1px solid rgba(255,255,255,0.12)',color:'#fff',cursor:'pointer' }}>
+                  💬 DM
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Socials */}
+          {(profile.instagram || profile.tiktok) && (
+            <div style={{ display:'flex',gap:10,justifyContent:'center',marginBottom:28 }}>
+              {profile.instagram && <a href={`https://instagram.com/${profile.instagram}`} target="_blank" style={{ padding:'10px 18px',borderRadius:99,background:'rgba(225,48,108,0.12)',border:'1px solid rgba(225,48,108,0.25)',color:'#fff',fontSize:13,fontWeight:700,textDecoration:'none' }}>📸 @{profile.instagram}</a>}
+              {profile.tiktok && <a href={`https://tiktok.com/@${profile.tiktok}`} target="_blank" style={{ padding:'10px 18px',borderRadius:99,background:'rgba(255,255,255,0.07)',border:'1px solid rgba(255,255,255,0.1)',color:'#fff',fontSize:13,fontWeight:700,textDecoration:'none' }}>🎵 @{profile.tiktok}</a>}
+            </div>
+          )}
+
+          {/* Mutual connections */}
+          {!isMe && mutuals.length > 0 && (
+            <div style={{ marginBottom:28 }}>
+              <h3 style={{ fontSize:16,fontWeight:800,marginBottom:4 }}>👥 Mutual Connections</h3>
+              <p style={{ fontSize:12,color:'rgba(255,255,255,0.38)',marginBottom:14 }}>{mutuals.length} people you both follow</p>
+              <div style={{ display:'flex',gap:12,overflowX:'auto',paddingBottom:4 }}>
+                {mutuals.map(m=>(
+                  <div key={m.id} onClick={()=>onViewProfile && onViewProfile(m.id)} style={{ display:'flex',flexDirection:'column',alignItems:'center',gap:6,flexShrink:0,cursor:'pointer' }}>
+                    <Avatar user={m} size={52} ring/>
+                    <span style={{ fontSize:11,color:'rgba(255,255,255,0.5)',fontWeight:600,maxWidth:56,textAlign:'center',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' }}>{m.name?.split(' ')[0]}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Shared events */}
+          {!isMe && sharedEvents.length > 0 && (
+            <div>
+              <h3 style={{ fontSize:16,fontWeight:800,marginBottom:4 }}>🎟️ Events Together</h3>
+              <p style={{ fontSize:12,color:'rgba(255,255,255,0.38)',marginBottom:14 }}>You've both been to these</p>
+              {sharedEvents.map(ev=>(
+                <div key={ev.id} style={{ display:'flex',alignItems:'center',gap:13,padding:'12px 14px',background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)',borderRadius:16,marginBottom:10 }}>
+                  <div style={{ width:44,height:44,borderRadius:12,background:ev.gradient||'linear-gradient(135deg,#3B0764,#7C3AED)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:20,flexShrink:0,overflow:'hidden' }}>
+                    {ev.flyerURL ? <img src={ev.flyerURL} style={{ width:'100%',height:'100%',objectFit:'cover' }}/> : ev.emoji||'🎭'}
+                  </div>
+                  <div style={{ flex:1,minWidth:0 }}>
+                    <div style={{ fontWeight:800,fontSize:14,marginBottom:2 }}>{ev.name}</div>
+                    <div style={{ fontSize:12,color:'rgba(255,255,255,0.4)' }}>📍 {ev.location}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!isMe && mutuals.length === 0 && sharedEvents.length === 0 && (
+            <div style={{ textAlign:'center',padding:'20px 0',color:'rgba(255,255,255,0.3)',fontSize:14 }}>
+              <div style={{ fontSize:36,marginBottom:10 }}>🤝</div>
+              <p>No mutual connections yet.<br/>Check in to more events together!</p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* ═══════════════════════════════════════════════════════════
    EXPLORE SCREEN
    ═══════════════════════════════════════════════════════════ */
 
@@ -1889,12 +2069,13 @@ const matchScore = (me, other) => {
   return score;
 };
 
-const ExploreScreen = ({ currentUser, onDm }) => {
+const ExploreScreen = ({ currentUser, onDm, onViewProfile }) => {
   const [allPeople, setAllPeople]     = useState([]);
   const [loading, setLoading]         = useState(true);
   const [search, setSearch]           = useState('');
   const [industryFilter, setIndustryFilter] = useState('All');
   const [viewUser, setViewUser]       = useState(null);
+  const handleViewUser = (u) => { if (onViewProfile && u?.id) onViewProfile(u.id); else setViewUser(u); };
 
   const INDUSTRIES = ['All','Fintech','AI/ML','Crypto/Web3','Venture Capital','Design/Tech','Marketing','Music/Entertainment','Healthcare','Real Estate','Other'];
 
@@ -1941,7 +2122,7 @@ const ExploreScreen = ({ currentUser, onDm }) => {
     return matchesSearch && matchesIndustry;
   }).sort((a,b) => b._score - a._score);
 
-  if (viewUser) return (
+  if (viewUser && !onViewProfile) return (
     <ExploreProfileView user={viewUser} currentUser={currentUser} onBack={()=>setViewUser(null)} onDm={u=>{setViewUser(null);onDm(u);}}/>
   );
 
@@ -1992,7 +2173,7 @@ const ExploreScreen = ({ currentUser, onDm }) => {
               </div>
               <div style={{ display:'flex',gap:12,overflowX:'auto',padding:'0 20px',paddingBottom:4 }}>
                 {topMatches.map(u=>(
-                  <SmartMatchCard key={u.id} user={u} currentUser={currentUser} onView={setViewUser} onDm={onDm}/>
+                  <SmartMatchCard key={u.id} user={u} currentUser={currentUser} onView={handleViewUser} onDm={onDm}/>
                 ))}
               </div>
             </div>
@@ -2010,7 +2191,7 @@ const ExploreScreen = ({ currentUser, onDm }) => {
               </div>
             )}
             {filtered.map(u=>(
-              <PeopleRow key={u.id} user={u} currentUser={currentUser} onView={setViewUser} onDm={onDm}/>
+              <PeopleRow key={u.id} user={u} currentUser={currentUser} onView={handleViewUser} onDm={onDm}/>
             ))}
           </div>
         </>
@@ -2089,7 +2270,7 @@ const ExploreProfileView = ({ user, currentUser, onBack, onDm }) => (
 /* ═══════════════════════════════════════════════════════════
    MESSAGES SCREEN
    ═══════════════════════════════════════════════════════════ */
-const MessagesScreen = ({ currentUser, onDm }) => {
+const MessagesScreen = ({ currentUser, onDm, onViewProfile }) => {
   const [threads, setThreads] = useState([]);
 
   useEffect(()=>{
@@ -2109,24 +2290,27 @@ const MessagesScreen = ({ currentUser, onDm }) => {
       {threads.map(t=>{
         const otherId = t.participants?.find(p=>p!==currentUser?.id);
         return (
-          <DMThreadRow key={t.id} threadId={t.id} otherId={otherId} preview={t.lastMessage} currentUser={currentUser} onDm={onDm}/>
+          <DMThreadRow key={t.id} threadId={t.id} otherId={otherId} preview={t.lastMessage} currentUser={currentUser} onDm={onDm} onViewProfile={onViewProfile}/>
         );
       })}
     </div>
   );
 };
 
-const DMThreadRow = ({ otherId, preview, currentUser, onDm }) => {
+const DMThreadRow = ({ otherId, preview, currentUser, onDm, onViewProfile }) => {
   const [otherUser, setOtherUser] = useState(null);
   useEffect(()=>{ if(otherId) getUser(otherId).then(setOtherUser); },[otherId]);
   if (!otherUser) return null;
   return (
-    <div onClick={()=>onDm(otherUser)} className="card-press" style={{ display:'flex',alignItems:'center',gap:13,padding:'14px',background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)',borderRadius:17,marginBottom:10,cursor:'pointer' }}>
-      <Avatar user={otherUser} size={50} online/>
-      <div style={{ flex:1,minWidth:0 }}>
+    <div className="card-press" style={{ display:'flex',alignItems:'center',gap:13,padding:'14px',background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)',borderRadius:17,marginBottom:10,cursor:'pointer' }}>
+      <div onClick={()=>onViewProfile&&onViewProfile(otherUser.id)}>
+        <Avatar user={otherUser} size={50} online/>
+      </div>
+      <div onClick={()=>onDm(otherUser)} style={{ flex:1,minWidth:0 }}>
         <div style={{ fontWeight:800,fontSize:15,marginBottom:4 }}>{otherUser.name}</div>
         <div style={{ fontSize:13,color:'rgba(255,255,255,0.45)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis' }}>{preview||'Start a conversation'}</div>
       </div>
+      <button onClick={()=>onDm(otherUser)} style={{ background:'rgba(139,92,246,0.18)',border:'1px solid rgba(139,92,246,0.3)',borderRadius:99,padding:'8px 14px',color:'#A78BFA',fontSize:12,fontWeight:700,cursor:'pointer',flexShrink:0 }}>DM</button>
     </div>
   );
 };
@@ -2169,10 +2353,13 @@ const App = () => {
   const [sentPhone, setSentPhone] = useState('');
 
   // Navigation
-  const [screen, setScreen]           = useState('home');
-  const [activeEvent, setActiveEvent] = useState(null);
-  const [activeDm, setActiveDm]       = useState(null);
+  const [screen, setScreen]               = useState('home');
+  const [activeEvent, setActiveEvent]     = useState(null);
+  const [activeDm, setActiveDm]           = useState(null);
   const [editingProfile, setEditingProfile] = useState(false);
+  const [viewingUserId, setViewingUserId] = useState(null);
+
+  const viewProfile = (uid) => { if (uid && uid !== currentUser?.id) setViewingUserId(uid); };
 
   // Listen to Firebase auth state
   useEffect(()=>{
@@ -2244,10 +2431,23 @@ const App = () => {
           </div>
         )}
 
+        {/* User profile overlay */}
+        {viewingUserId && !activeDm && (
+          <div style={{ position:'absolute',inset:0,zIndex:48,background:'#08080F',overflowY:'auto' }}>
+            <UserProfileScreen
+              userId={viewingUserId}
+              currentUser={currentUser}
+              onBack={()=>setViewingUserId(null)}
+              onDm={u=>{ setViewingUserId(null); setActiveDm(u); }}
+              onViewProfile={viewProfile}
+            />
+          </div>
+        )}
+
         {/* Event screen */}
-        {activeEvent && !activeDm && (
+        {activeEvent && !activeDm && !viewingUserId && (
           <div style={{ position:'absolute',inset:0,zIndex:40,background:'#08080F',overflowY:'auto' }}>
-            <EventScreen event={activeEvent} currentUser={currentUser} onBack={()=>setActiveEvent(null)} onDm={u=>setActiveDm(u)}/>
+            <EventScreen event={activeEvent} currentUser={currentUser} onBack={()=>setActiveEvent(null)} onDm={u=>setActiveDm(u)} onViewProfile={viewProfile}/>
           </div>
         )}
 
@@ -2270,8 +2470,8 @@ const App = () => {
           <>
             <div className="screen-scroll">
               {screen==='home'     && <HomeScreen user={currentUser} onOpenEvent={setActiveEvent} onCreateEvent={()=>setScreen('create')} onProfile={()=>setScreen('profile')}/>}
-              {screen==='explore'  && <ExploreScreen currentUser={currentUser} onDm={setActiveDm}/>}
-              {screen==='messages' && <MessagesScreen currentUser={currentUser} onDm={setActiveDm}/>}
+              {screen==='explore'  && <ExploreScreen currentUser={currentUser} onDm={setActiveDm} onViewProfile={viewProfile}/>}
+              {screen==='messages' && <MessagesScreen currentUser={currentUser} onDm={setActiveDm} onViewProfile={viewProfile}/>}
               {screen==='profile'  && <ProfileScreen currentUser={currentUser} onDm={setActiveDm} onEditProfile={()=>setEditingProfile(true)}/>}
             </div>
             <BottomNav active={screen} onNav={navigate}/>
