@@ -175,6 +175,28 @@ const watchUser = (uid, cb) =>
     cb(doc.exists ? { id: doc.id, ...doc.data() } : null)
   );
 
+/* ── Follows ── */
+const followUser = async (myUid, theirUid) => {
+  const batch = db.batch();
+  batch.set(db.collection('users').doc(myUid).collection('following').doc(theirUid), { followedAt: firebase.firestore.FieldValue.serverTimestamp() });
+  batch.update(db.collection('users').doc(myUid), { following: firebase.firestore.FieldValue.increment(1) });
+  batch.update(db.collection('users').doc(theirUid), { followers: firebase.firestore.FieldValue.increment(1) });
+  await batch.commit();
+};
+
+const unfollowUser = async (myUid, theirUid) => {
+  const batch = db.batch();
+  batch.delete(db.collection('users').doc(myUid).collection('following').doc(theirUid));
+  batch.update(db.collection('users').doc(myUid), { following: firebase.firestore.FieldValue.increment(-1) });
+  batch.update(db.collection('users').doc(theirUid), { followers: firebase.firestore.FieldValue.increment(-1) });
+  await batch.commit();
+};
+
+const getFollowing = async (myUid) => {
+  const snap = await db.collection('users').doc(myUid).collection('following').get();
+  return new Set(snap.docs.map(d => d.id));
+};
+
 /* ── Events ── */
 const getEvents = async () => {
   const snap = await db.collection('events').orderBy('createdAt', 'desc').get();
@@ -1028,6 +1050,7 @@ const EventScreen = ({ event, currentUser, onBack, onDm }) => {
   const [guests, setGuests]               = useState([]);
   const [announcementText, setAnnouncementText] = useState('');
   const [followed, setFollowed]           = useState({});
+  const [followLoading, setFollowLoading] = useState({});
   const toast  = useToast();
   const postPhotoRef = useRef(null);
 
@@ -1052,6 +1075,13 @@ const EventScreen = ({ event, currentUser, onBack, onDm }) => {
     if (!event?.id) return;
     const unsub = watchFeed(event.id, setFeed);
     getAttendees(event.id).then(setAttendees);
+    if (currentUser?.id) {
+      getFollowing(currentUser.id).then(followSet => {
+        const map = {};
+        followSet.forEach(uid => { map[uid] = true; });
+        setFollowed(map);
+      });
+    }
     if (isPrivate && currentUser?.id && !isHost) {
       getMyGuestStatus(event.id, currentUser.id).then(setGuestStatus);
     }
@@ -1329,8 +1359,23 @@ const EventScreen = ({ event, currentUser, onBack, onDm }) => {
                   </div>
                   <div style={{ display:'flex',gap:10 }}>
                     <button onClick={()=>onDm(rec.user)} style={{ flex:1,padding:'12px',borderRadius:13,fontSize:14,fontWeight:800,background:'linear-gradient(135deg,#7C3AED,#C026D3)',border:'none',color:'#fff',cursor:'pointer',boxShadow:'0 4px 16px rgba(124,58,237,0.4)' }}>👋 Say Hi</button>
-                    <button onClick={()=>setFollowed(f=>({...f,[rec.user.id]:!f[rec.user.id]}))} style={{ flex:1,padding:'12px',borderRadius:13,fontSize:14,fontWeight:700,background:followed[rec.user.id]?'rgba(139,92,246,0.2)':'rgba(255,255,255,0.07)',border:`1px solid ${followed[rec.user.id]?'rgba(139,92,246,0.4)':'rgba(255,255,255,0.1)'}`,color:followed[rec.user.id]?'#A78BFA':'#fff',cursor:'pointer' }}>
-                      {followed[rec.user.id]?'✓ Following':'Follow +'}
+                    <button
+                      disabled={!!followLoading[rec.user.id]}
+                      onClick={async()=>{
+                        if (!currentUser?.id) return;
+                        setFollowLoading(l=>({...l,[rec.user.id]:true}));
+                        try {
+                          if (followed[rec.user.id]) {
+                            await unfollowUser(currentUser.id, rec.user.id);
+                            setFollowed(f=>({...f,[rec.user.id]:false}));
+                          } else {
+                            await followUser(currentUser.id, rec.user.id);
+                            setFollowed(f=>({...f,[rec.user.id]:true}));
+                          }
+                        } finally { setFollowLoading(l=>({...l,[rec.user.id]:false})); }
+                      }}
+                      style={{ flex:1,padding:'12px',borderRadius:13,fontSize:14,fontWeight:700,background:followed[rec.user.id]?'rgba(139,92,246,0.2)':'rgba(255,255,255,0.07)',border:`1px solid ${followed[rec.user.id]?'rgba(139,92,246,0.4)':'rgba(255,255,255,0.1)'}`,color:followed[rec.user.id]?'#A78BFA':'#fff',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:6 }}>
+                      {followLoading[rec.user.id] ? <Spinner size={14}/> : followed[rec.user.id] ? '✓ Following' : 'Follow +'}
                     </button>
                   </div>
                 </div>
