@@ -217,11 +217,15 @@ const createEvent = async (data) => {
 
 const updateEvent = async (id, data) => db.collection('events').doc(id).update(data);
 
-const checkIn = async (eventId, uid) => {
+const checkIn = async (eventId, uid, isPrivateApproved=false) => {
   await db.collection('events').doc(eventId).collection('attendees').doc(uid).set({
     checkedIn: true, checkedInAt: firebase.firestore.FieldValue.serverTimestamp(),
   });
-  await db.collection('events').doc(eventId).update({ checkedInCount: firebase.firestore.FieldValue.increment(1) });
+  // Only increment "total" (going) for public events — private approved guests are already counted at approval
+  const countUpdate = isPrivateApproved
+    ? { checkedInCount: firebase.firestore.FieldValue.increment(1) }
+    : { checkedInCount: firebase.firestore.FieldValue.increment(1), total: firebase.firestore.FieldValue.increment(1) };
+  await db.collection('events').doc(eventId).update(countUpdate);
   // Track attended events on user profile for shared-event lookups
   await db.collection('users').doc(uid).update({
     attendedEventIds: firebase.firestore.FieldValue.arrayUnion(eventId),
@@ -286,15 +290,48 @@ const watchGuests = (eventId, cb) =>
   db.collection('events').doc(eventId).collection('guests')
     .onSnapshot(snap => cb(snap.docs.map(d => ({ id:d.id, ...d.data() }))));
 
-const updateGuestStatus = async (eventId, uid, status) => {
-  await db.collection('events').doc(eventId).collection('guests').doc(uid).update({
+const updateGuestStatus = async (eventId, uid, status, prevStatus) => {
+  const batch = db.batch();
+  batch.update(db.collection('events').doc(eventId).collection('guests').doc(uid), {
     status, updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
   });
+  // Keep "total" (going) in sync: approved → increment, un-approved → decrement
+  if (status === 'approved' && prevStatus !== 'approved') {
+    batch.update(db.collection('events').doc(eventId), { total: firebase.firestore.FieldValue.increment(1) });
+  } else if (status !== 'approved' && prevStatus === 'approved') {
+    batch.update(db.collection('events').doc(eventId), { total: firebase.firestore.FieldValue.increment(-1) });
+  }
+  await batch.commit();
 };
 
 const getMyGuestStatus = async (eventId, uid) => {
   const doc = await db.collection('events').doc(eventId).collection('guests').doc(uid).get();
   return doc.exists ? doc.data().status : null;
+};
+
+/* ── Co-hosts ── */
+const addCoHost = async (eventId, uid) => {
+  await db.collection('events').doc(eventId).update({ coHostIds: firebase.firestore.FieldValue.arrayUnion(uid) });
+};
+const removeCoHost = async (eventId, uid) => {
+  await db.collection('events').doc(eventId).update({ coHostIds: firebase.firestore.FieldValue.arrayRemove(uid) });
+};
+
+/* ── Notifications ── */
+const sendNotification = async (uid, data) => {
+  await db.collection('users').doc(uid).collection('notifications').add({
+    ...data, read: false, createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+  });
+};
+const watchNotifications = (uid, cb) =>
+  db.collection('users').doc(uid).collection('notifications')
+    .orderBy('createdAt', 'desc').limit(30)
+    .onSnapshot(snap => cb(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+const markAllRead = async (uid) => {
+  const snap = await db.collection('users').doc(uid).collection('notifications').where('read','==',false).get();
+  const batch = db.batch();
+  snap.docs.forEach(d => batch.update(d.ref, { read: true }));
+  await batch.commit();
 };
 
 /* ── DMs ── */
@@ -737,9 +774,140 @@ const ProfileSetupScreen = ({ firebaseUser, onComplete }) => {
 };
 
 /* ═══════════════════════════════════════════════════════════
+   GIF PICKER
+   ═══════════════════════════════════════════════════════════ */
+const TENOR_KEY = 'AIzaSyC_oXcx9gBFO2VhKJxN-EEIbxkiG6iH1lE';
+const GifPicker = ({ onSelect, onClose }) => {
+  const [query, setQuery] = React.useState('');
+  const [gifs, setGifs] = React.useState([]);
+  const [loading, setLoading] = React.useState(false);
+
+  const search = async (q) => {
+    if (!q.trim()) { setGifs([]); return; }
+    setLoading(true);
+    try {
+      const endpoint = q
+        ? `https://tenor.googleapis.com/v2/search?q=${encodeURIComponent(q)}&key=${TENOR_KEY}&limit=20&media_filter=gif`
+        : `https://tenor.googleapis.com/v2/featured?key=${TENOR_KEY}&limit=20&media_filter=gif`;
+      const res = await fetch(endpoint);
+      const data = await res.json();
+      setGifs(data.results||[]);
+    } catch(e) { console.error(e); }
+    finally { setLoading(false); }
+  };
+
+  React.useEffect(() => { search('party'); }, []);
+
+  const TRENDING = ['🔥 Hype','😂 Funny','🥂 Cheers','💃 Dance','🎉 Celebrate','👏 Clap'];
+
+  return (
+    <div style={{ position:'absolute',inset:0,zIndex:70,background:'rgba(0,0,0,0.85)',display:'flex',alignItems:'flex-end' }} onClick={onClose}>
+      <div style={{ width:'100%',background:'#111118',borderRadius:'22px 22px 0 0',maxHeight:'75vh',display:'flex',flexDirection:'column' }} onClick={e=>e.stopPropagation()}>
+        <div style={{ width:36,height:4,background:'rgba(255,255,255,0.15)',borderRadius:99,margin:'14px auto 12px' }}/>
+        <div style={{ padding:'0 14px 10px',display:'flex',gap:8,alignItems:'center' }}>
+          <input
+            value={query} onChange={e=>{ setQuery(e.target.value); search(e.target.value); }}
+            placeholder="Search GIFs..." className="input-field"
+            style={{ flex:1,fontSize:14 }} autoFocus
+          />
+          <button onClick={onClose} style={{ background:'rgba(255,255,255,0.08)',border:'none',borderRadius:'50%',width:36,height:36,color:'#fff',fontSize:16,cursor:'pointer' }}>✕</button>
+        </div>
+        <div style={{ display:'flex',gap:6,padding:'0 14px 10px',overflowX:'auto' }}>
+          {TRENDING.map(t=>(
+            <button key={t} onClick={()=>{ const q=t.split(' ').slice(1).join(' '); setQuery(q); search(q); }}
+              style={{ flexShrink:0,padding:'6px 12px',borderRadius:99,background:'rgba(255,255,255,0.07)',border:'1px solid rgba(255,255,255,0.1)',color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap' }}>
+              {t}
+            </button>
+          ))}
+        </div>
+        <div style={{ flex:1,overflowY:'auto',padding:'0 14px 20px' }}>
+          {loading && <div style={{ display:'flex',justifyContent:'center',padding:20 }}><Spinner size={28}/></div>}
+          <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:6 }}>
+            {gifs.map(g=>{
+              const url = g.media_formats?.gif?.url || g.media_formats?.tinygif?.url;
+              if (!url) return null;
+              return (
+                <div key={g.id} onClick={()=>onSelect(url)} style={{ borderRadius:10,overflow:'hidden',cursor:'pointer',background:'rgba(255,255,255,0.05)',aspectRatio:'4/3' }}>
+                  <img src={url} style={{ width:'100%',height:'100%',objectFit:'cover',display:'block' }} loading="lazy"/>
+                </div>
+              );
+            })}
+          </div>
+          {!loading && gifs.length===0 && <div style={{ textAlign:'center',padding:20,color:'rgba(255,255,255,0.3)' }}>No GIFs found</div>}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ═══════════════════════════════════════════════════════════
+   NOTIFICATION BELL
+   ═══════════════════════════════════════════════════════════ */
+const NotificationBell = ({ currentUser, onOpenEvent }) => {
+  const [notifs, setNotifs] = React.useState([]);
+  const [open, setOpen] = React.useState(false);
+  const unread = notifs.filter(n=>!n.read).length;
+
+  React.useEffect(() => {
+    if (!currentUser?.id) return;
+    const unsub = watchNotifications(currentUser.id, setNotifs);
+    return ()=>unsub();
+  }, [currentUser?.id]);
+
+  const handleOpen = async () => {
+    setOpen(o=>!o);
+    if (!open && unread > 0) await markAllRead(currentUser.id);
+  };
+
+  const timeAgo = (ts) => {
+    if (!ts) return '';
+    const secs = Math.floor((Date.now() - ts.toMillis()) / 1000);
+    if (secs < 60) return 'just now';
+    if (secs < 3600) return `${Math.floor(secs/60)}m ago`;
+    if (secs < 86400) return `${Math.floor(secs/3600)}h ago`;
+    return `${Math.floor(secs/86400)}d ago`;
+  };
+
+  return (
+    <div style={{ position:'relative' }}>
+      <button onClick={handleOpen} style={{ position:'relative',background:'rgba(255,255,255,0.07)',border:'1px solid rgba(255,255,255,0.08)',borderRadius:'50%',width:41,height:41,fontSize:17,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer' }}>
+        🔔
+        {unread > 0 && (
+          <div style={{ position:'absolute',top:2,right:2,width:16,height:16,background:'#EF4444',borderRadius:'50%',fontSize:9,fontWeight:900,color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',border:'2px solid #08080F' }}>
+            {unread > 9 ? '9+' : unread}
+          </div>
+        )}
+      </button>
+      {open && (
+        <div style={{ position:'absolute',top:48,right:0,width:300,background:'#111118',border:'1px solid rgba(255,255,255,0.1)',borderRadius:18,boxShadow:'0 20px 60px rgba(0,0,0,0.6)',zIndex:100,overflow:'hidden' }}>
+          <div style={{ padding:'14px 16px 10px',borderBottom:'1px solid rgba(255,255,255,0.07)',display:'flex',justifyContent:'space-between',alignItems:'center' }}>
+            <span style={{ fontWeight:800,fontSize:15 }}>Notifications</span>
+            <button onClick={()=>setOpen(false)} style={{ background:'none',border:'none',color:'rgba(255,255,255,0.4)',fontSize:16,cursor:'pointer' }}>✕</button>
+          </div>
+          <div style={{ maxHeight:360,overflowY:'auto' }}>
+            {notifs.length === 0 && <div style={{ padding:'28px 16px',textAlign:'center',color:'rgba(255,255,255,0.3)',fontSize:13 }}>No notifications yet</div>}
+            {notifs.map(n=>(
+              <div key={n.id} onClick={()=>{ setOpen(false); if(n.eventId&&onOpenEvent) onOpenEvent(n.eventId); }}
+                style={{ padding:'12px 16px',borderBottom:'1px solid rgba(255,255,255,0.05)',cursor:n.eventId?'pointer':'default',background:n.read?'transparent':'rgba(139,92,246,0.06)',display:'flex',gap:12,alignItems:'flex-start' }}>
+                <span style={{ fontSize:22,flexShrink:0 }}>{n.icon||'🔔'}</span>
+                <div style={{ flex:1,minWidth:0 }}>
+                  <div style={{ fontSize:13,color:'rgba(255,255,255,0.85)',lineHeight:1.5,marginBottom:3 }}>{n.message}</div>
+                  <div style={{ fontSize:11,color:'rgba(255,255,255,0.3)' }}>{timeAgo(n.createdAt)}</div>
+                </div>
+                {!n.read && <div style={{ width:7,height:7,borderRadius:'50%',background:'#8B5CF6',flexShrink:0,marginTop:4 }}/>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* ═══════════════════════════════════════════════════════════
    HOME SCREEN
    ═══════════════════════════════════════════════════════════ */
-const HomeScreen = ({ user, onOpenEvent, onCreateEvent, onProfile }) => {
+const HomeScreen = ({ user, onOpenEvent, onCreateEvent, onProfile, currentUser }) => {
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const h = new Date().getHours();
@@ -761,7 +929,7 @@ const HomeScreen = ({ user, onOpenEvent, onCreateEvent, onProfile }) => {
           <h2 style={{ fontSize:27,fontWeight:900,letterSpacing:-0.5 }}>{user?.name?.split(' ')[0]} 👋</h2>
         </div>
         <div style={{ display:'flex',gap:10,alignItems:'center' }}>
-          <button style={{ background:'rgba(255,255,255,0.07)',border:'1px solid rgba(255,255,255,0.08)',borderRadius:'50%',width:41,height:41,fontSize:19,display:'flex',alignItems:'center',justifyContent:'center' }}>🔔</button>
+          <NotificationBell currentUser={currentUser} onOpenEvent={onOpenEvent}/>
           <div onClick={onProfile} style={{ cursor:'pointer' }}>
             <Avatar user={user} size={41} ring />
           </div>
@@ -793,7 +961,6 @@ const HomeScreen = ({ user, onOpenEvent, onCreateEvent, onProfile }) => {
             >
               <div style={{ position:'absolute',inset:0,opacity:0.35,backgroundImage:'radial-gradient(rgba(255,255,255,0.08) 1px,transparent 1px)',backgroundSize:'22px 22px',pointerEvents:'none' }}/>
               <div style={{ position:'absolute',bottom:0,left:0,right:0,height:'55%',background:'linear-gradient(to top,rgba(0,0,0,0.5),transparent)',pointerEvents:'none' }}/>
-              {/* Flyer image */}
               {ev.flyerURL && (
                 <div style={{ position:'absolute',inset:0,overflow:'hidden' }}>
                   <img src={ev.flyerURL} style={{ width:'100%',height:'100%',objectFit:'cover',opacity:0.35 }} />
@@ -1065,10 +1232,12 @@ const EventScreen = ({ event, currentUser, onBack, onDm, onViewProfile }) => {
   const [editingEvent, setEditingEvent]   = useState(false);
   const [showRSVPModal, setShowRSVPModal] = useState(false);
   const [rsvpMessage, setRsvpMessage]     = useState('');
+  const [showGifPicker, setShowGifPicker] = useState(false);
+  const [postGifUrl, setPostGifUrl]       = useState(null);
   const toast  = useToast();
   const postPhotoRef = useRef(null);
 
-  const isHost    = event.hostId === currentUser?.id;
+  const isHost    = event.hostId === currentUser?.id || (event.coHostIds||[]).includes(currentUser?.id);
   const isPrivate = event.privacy === 'invite';
   const eventLink = `${window.location.origin}${window.location.pathname}?event=${event.id}`;
 
@@ -1110,7 +1279,7 @@ const EventScreen = ({ event, currentUser, onBack, onDm, onViewProfile }) => {
     if (checkedIn||!currentUser?.id) return;
     if (isPrivate && !isHost && guestStatus!=='approved') return;
     try {
-      await checkIn(event.id, currentUser.id);
+      await checkIn(event.id, currentUser.id, isPrivate && guestStatus==='approved');
       await addPost(event.id, { userId:currentUser.id, userName:currentUser.name, userPhoto:currentUser.photoURL||null, type:'arrived', text:'Just checked in! 🎉', likes:[], userJob:currentUser.jobTitle||'' });
       setCheckedIn(true); setAttendees(a=>[...a,currentUser]);
       toast('Checked in! 🎉','success');
@@ -1131,14 +1300,14 @@ const EventScreen = ({ event, currentUser, onBack, onDm, onViewProfile }) => {
   };
 
   const doPost = async () => {
-    if (!postText.trim()&&!postPhotoFile) return;
+    if (!postText.trim()&&!postPhotoFile&&!postGifUrl) return;
     if (!currentUser?.id) return;
     setPostLoading(true);
     try {
       let photoURL = null;
       if (postPhotoFile) photoURL = await uploadFile(`posts/${event.id}/${currentUser.id}_${Date.now()}.jpg`, postPhotoFile);
-      await addPost(event.id, { userId:currentUser.id, userName:currentUser.name, userPhoto:currentUser.photoURL||null, type:'shoutout', text:postText.trim(), photoURL, likes:[], userJob:currentUser.jobTitle||'' });
-      setPostText(''); setPostPhotoFile(null); setPostPhotoPreview(null);
+      await addPost(event.id, { userId:currentUser.id, userName:currentUser.name, userPhoto:currentUser.photoURL||null, type:'shoutout', text:postText.trim(), photoURL: photoURL || postGifUrl || null, isGif: !!postGifUrl && !postPhotoFile, likes:[], userJob:currentUser.jobTitle||'' });
+      setPostText(''); setPostPhotoFile(null); setPostPhotoPreview(null); setPostGifUrl(null);
     } catch(e) { toast('Failed to post','error'); }
     finally { setPostLoading(false); }
   };
@@ -1147,7 +1316,14 @@ const EventScreen = ({ event, currentUser, onBack, onDm, onViewProfile }) => {
     if (!announcementText.trim()||!isHost) return;
     try {
       await addPost(event.id, { userId:currentUser.id, userName:currentUser.name, userPhoto:currentUser.photoURL||null, type:'announcement', text:announcementText.trim(), likes:[], userJob:'Host' });
-      setAnnouncementText(''); toast('Announcement posted! 📢','success');
+      // Notify all approved guests
+      const approvedIds = guests.filter(g=>g.status==='approved').map(g=>g.id);
+      await Promise.all(approvedIds.map(uid => sendNotification(uid, {
+        type: 'announcement', eventId: event.id, eventName: event.name,
+        message: `📢 ${event.name}: ${announcementText.trim()}`,
+        icon: event.emoji||'📢',
+      })));
+      setAnnouncementText(''); toast('Announcement sent! 📢','success');
     } catch(e) { toast('Failed to post announcement','error'); }
   };
 
@@ -1158,8 +1334,22 @@ const EventScreen = ({ event, currentUser, onBack, onDm, onViewProfile }) => {
   };
 
   const doUpdateGuest = async (uid, status) => {
+    const prevStatus = guests.find(g=>g.id===uid)?.status;
     try {
-      await updateGuestStatus(event.id, uid, status);
+      await updateGuestStatus(event.id, uid, status, prevStatus);
+      if (status === 'approved' && prevStatus !== 'approved') {
+        await sendNotification(uid, {
+          type: 'rsvp_approved', eventId: event.id, eventName: event.name,
+          message: `✅ You're approved for ${event.name}! You can now check in.`,
+          icon: event.emoji||'🎉',
+        });
+      } else if (status === 'waitlisted') {
+        await sendNotification(uid, {
+          type: 'rsvp_waitlisted', eventId: event.id, eventName: event.name,
+          message: `📋 You've been added to the waitlist for ${event.name}.`,
+          icon: event.emoji||'📋',
+        });
+      }
       const msg = status==='approved'?'Guest approved ✓':status==='waitlisted'?'Added to waitlist':'Request denied';
       toast(msg, status==='approved'?'success':'info');
     } catch(e) { toast('Failed to update','error'); }
@@ -1250,6 +1440,16 @@ const EventScreen = ({ event, currentUser, onBack, onDm, onViewProfile }) => {
         </div>
       </div>
 
+      {/* Payment Links Banner */}
+      {(event.venmo||event.cashapp||event.paypal) && (
+        <div style={{ padding:'12px 16px',background:'rgba(16,185,129,0.07)',borderBottom:'1px solid rgba(16,185,129,0.15)',display:'flex',alignItems:'center',gap:10,flexWrap:'wrap' }}>
+          <span style={{ fontSize:13,fontWeight:700,color:'#10B981',flexShrink:0 }}>💸 Pay to Attend:</span>
+          {event.venmo&&<a href={`https://venmo.com/${event.venmo}`} target="_blank" style={{ padding:'5px 12px',borderRadius:99,background:'rgba(98,0,238,0.2)',border:'1px solid rgba(98,0,238,0.4)',color:'#C4B5FD',fontSize:12,fontWeight:700,textDecoration:'none' }}>💜 @{event.venmo}</a>}
+          {event.cashapp&&<a href={`https://cash.app/$${event.cashapp}`} target="_blank" style={{ padding:'5px 12px',borderRadius:99,background:'rgba(0,214,107,0.12)',border:'1px solid rgba(0,214,107,0.3)',color:'#4ADE80',fontSize:12,fontWeight:700,textDecoration:'none' }}>💚 ${event.cashapp}</a>}
+          {event.paypal&&<a href={`https://paypal.me/${event.paypal}`} target="_blank" style={{ padding:'5px 12px',borderRadius:99,background:'rgba(0,112,243,0.12)',border:'1px solid rgba(0,112,243,0.3)',color:'#60A5FA',fontSize:12,fontWeight:700,textDecoration:'none' }}>🔵 PayPal</a>}
+        </div>
+      )}
+
       {/* Tab bar */}
       <div style={{ display:'flex',background:'rgba(8,8,15,0.95)',borderBottom:'1px solid rgba(255,255,255,0.06)',position:'sticky',top:0,zIndex:20,backdropFilter:'blur(20px)' }}>
         {tabs.map(t=>(
@@ -1278,23 +1478,26 @@ const EventScreen = ({ event, currentUser, onBack, onDm, onViewProfile }) => {
             ))}
 
             {/* Post composer */}
-            <div style={{ background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.08)',borderRadius:16,padding:'12px 14px',marginBottom:14 }}>
-              {postPhotoPreview&&(
+            <div style={{ background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.08)',borderRadius:16,padding:'12px 14px',marginBottom:14,position:'relative' }}>
+              {(postPhotoPreview||postGifUrl)&&(
                 <div style={{ position:'relative',marginBottom:10 }}>
-                  <img src={postPhotoPreview} style={{ width:'100%',maxHeight:200,objectFit:'cover',borderRadius:12 }}/>
-                  <button onClick={()=>{setPostPhotoFile(null);setPostPhotoPreview(null);}} style={{ position:'absolute',top:8,right:8,background:'rgba(0,0,0,0.6)',border:'none',borderRadius:'50%',width:28,height:28,color:'#fff',fontSize:14,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center' }}>✕</button>
+                  <img src={postPhotoPreview||postGifUrl} style={{ width:'100%',maxHeight:200,objectFit:'cover',borderRadius:12 }}/>
+                  <button onClick={()=>{setPostPhotoFile(null);setPostPhotoPreview(null);setPostGifUrl(null);}} style={{ position:'absolute',top:8,right:8,background:'rgba(0,0,0,0.6)',border:'none',borderRadius:'50%',width:28,height:28,color:'#fff',fontSize:14,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center' }}>✕</button>
+                  {postGifUrl&&<div style={{ position:'absolute',bottom:8,left:8,background:'rgba(0,0,0,0.6)',borderRadius:6,padding:'2px 8px',fontSize:11,fontWeight:700,color:'#fff' }}>GIF</div>}
                 </div>
               )}
               <div style={{ display:'flex',gap:10,alignItems:'center' }}>
                 <Avatar user={currentUser} size={36}/>
                 <input value={postText} onChange={e=>setPostText(e.target.value)} onKeyDown={e=>e.key==='Enter'&&!e.shiftKey&&doPost()} placeholder="Share a shoutout to the room..." style={{ flex:1,background:'none',border:'none',color:'#fff',fontSize:14,padding:0 }}/>
                 <button onClick={()=>postPhotoRef.current.click()} style={{ background:'none',border:'none',fontSize:20,cursor:'pointer',opacity:0.55,padding:'2px',flexShrink:0 }}>📷</button>
-                {(postText.trim()||postPhotoFile)&&(
+                <button onClick={()=>setShowGifPicker(true)} style={{ background:'rgba(255,255,255,0.07)',border:'1px solid rgba(255,255,255,0.12)',borderRadius:7,padding:'4px 8px',color:'#fff',fontSize:11,fontWeight:800,cursor:'pointer',flexShrink:0,letterSpacing:0.5 }}>GIF</button>
+                {(postText.trim()||postPhotoFile||postGifUrl)&&(
                   <button onClick={doPost} disabled={postLoading} style={{ background:'linear-gradient(135deg,#7C3AED,#C026D3)',border:'none',borderRadius:99,padding:'7px 15px',color:'#fff',fontSize:12,fontWeight:800,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',gap:6 }}>
                     {postLoading?<Spinner size={14}/>:'Post'}
                   </button>
                 )}
               </div>
+              {showGifPicker && <GifPicker onSelect={url=>{ setPostGifUrl(url); setPostPhotoFile(null); setPostPhotoPreview(null); setShowGifPicker(false); }} onClose={()=>setShowGifPicker(false)}/>}
             </div>
 
             {feed.filter(p=>p.type!=='announcement').length===0&&<div style={{ textAlign:'center',padding:'40px 0',color:'rgba(255,255,255,0.3)',fontSize:14 }}>No posts yet — be the first!</div>}
@@ -1430,6 +1633,13 @@ const EventScreen = ({ event, currentUser, onBack, onDm, onViewProfile }) => {
                 ✏️ Edit Event Details
               </button>
             </div>
+
+            <div style={{ height:1,background:'rgba(255,255,255,0.07)',marginBottom:24 }}/>
+
+            {/* Co-host management — only original host can add/remove */}
+            {event.hostId === currentUser?.id && (
+              <CoHostManager event={event} currentUser={currentUser} toast={toast}/>
+            )}
 
             <div style={{ height:1,background:'rgba(255,255,255,0.07)',marginBottom:24 }}/>
 
@@ -1654,6 +1864,93 @@ const DMScreen = ({ user, currentUser, onBack }) => {
    CREATE EVENT SCREEN
    ═══════════════════════════════════════════════════════════ */
 /* ═══════════════════════════════════════════════════════════
+   CO-HOST MANAGER
+   ═══════════════════════════════════════════════════════════ */
+const CoHostManager = ({ event, currentUser, toast }) => {
+  const [search, setSearch]       = useState('');
+  const [results, setResults]     = useState([]);
+  const [coHosts, setCoHosts]     = useState([]);
+  const [loading, setLoading]     = useState(false);
+
+  useEffect(() => {
+    const ids = event.coHostIds||[];
+    if (!ids.length) { setCoHosts([]); return; }
+    Promise.all(ids.map(getUser)).then(p => setCoHosts(p.filter(Boolean)));
+  }, [JSON.stringify(event.coHostIds)]);
+
+  const doSearch = async (q) => {
+    if (!q.trim()) { setResults([]); return; }
+    const snap = await db.collection('users').orderBy('name').startAt(q).endAt(q+'\uf8ff').limit(8).get();
+    setResults(snap.docs.map(d=>({id:d.id,...d.data()})).filter(u=>u.id!==currentUser?.id&&u.id!==event.hostId));
+  };
+
+  const doAdd = async (user) => {
+    setLoading(true);
+    try {
+      await addCoHost(event.id, user.id);
+      event.coHostIds = [...(event.coHostIds||[]), user.id];
+      setCoHosts(c=>[...c, user]);
+      setSearch(''); setResults([]);
+      toast(`${user.name} added as co-host ✓`, 'success');
+    } catch(e) { toast('Failed to add co-host','error'); }
+    finally { setLoading(false); }
+  };
+
+  const doRemove = async (uid) => {
+    try {
+      await removeCoHost(event.id, uid);
+      event.coHostIds = (event.coHostIds||[]).filter(id=>id!==uid);
+      setCoHosts(c=>c.filter(u=>u.id!==uid));
+      toast('Co-host removed','info');
+    } catch(e) { toast('Failed to remove','error'); }
+  };
+
+  return (
+    <div style={{ marginBottom:24 }}>
+      <h3 style={{ fontSize:17,fontWeight:900,marginBottom:4 }}>👥 Co-hosts</h3>
+      <p style={{ fontSize:12,color:'rgba(255,255,255,0.4)',marginBottom:12 }}>Co-hosts can manage guests and post announcements</p>
+
+      {/* Current co-hosts */}
+      {coHosts.map(u=>(
+        <div key={u.id} style={{ display:'flex',alignItems:'center',gap:10,padding:'10px 12px',background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.07)',borderRadius:13,marginBottom:8 }}>
+          <Avatar user={u} size={36}/>
+          <div style={{ flex:1,minWidth:0 }}>
+            <div style={{ fontWeight:700,fontSize:14 }}>{u.name}</div>
+            <div style={{ fontSize:12,color:'rgba(255,255,255,0.4)' }}>{u.jobTitle}</div>
+          </div>
+          <button onClick={()=>doRemove(u.id)} style={{ background:'rgba(239,68,68,0.12)',border:'1px solid rgba(239,68,68,0.25)',borderRadius:8,padding:'5px 10px',color:'#FCA5A5',fontSize:12,fontWeight:700,cursor:'pointer' }}>Remove</button>
+        </div>
+      ))}
+      {coHosts.length===0&&<div style={{ fontSize:13,color:'rgba(255,255,255,0.3)',marginBottom:10 }}>No co-hosts yet</div>}
+
+      {/* Search to add */}
+      <div style={{ position:'relative' }}>
+        <input
+          className="input-field" value={search}
+          onChange={e=>{ setSearch(e.target.value); doSearch(e.target.value); }}
+          placeholder="Search by name to add co-host..."
+          style={{ fontSize:14 }}
+        />
+        {results.length>0&&(
+          <div style={{ position:'absolute',top:'100%',left:0,right:0,background:'#1a1a24',border:'1px solid rgba(255,255,255,0.1)',borderRadius:12,zIndex:10,marginTop:4,overflow:'hidden' }}>
+            {results.map(u=>(
+              <div key={u.id} onClick={()=>doAdd(u)} style={{ display:'flex',alignItems:'center',gap:10,padding:'10px 14px',cursor:'pointer',borderBottom:'1px solid rgba(255,255,255,0.05)' }}>
+                <Avatar user={u} size={32}/>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontWeight:700,fontSize:13 }}>{u.name}</div>
+                  <div style={{ fontSize:11,color:'rgba(255,255,255,0.4)' }}>{u.jobTitle}</div>
+                </div>
+                <span style={{ fontSize:12,color:'#A78BFA',fontWeight:700 }}>+ Add</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+/* ═══════════════════════════════════════════════════════════
    EDIT EVENT PANEL
    ═══════════════════════════════════════════════════════════ */
 const EditEventPanel = ({ event, onClose, onSaved, toast }) => {
@@ -1675,6 +1972,9 @@ const EditEventPanel = ({ event, onClose, onSaved, toast }) => {
     description: event.description||'',
     emoji: event.emoji||'🔥',
     privacy: event.privacy||'invite',
+    venmo: event.venmo||'',
+    cashapp: event.cashapp||'',
+    paypal: event.paypal||'',
   });
   const initGradIdx = GRADIENTS.indexOf(event.gradient);
   const [gradIdx, setGradIdx]   = useState(initGradIdx >= 0 ? initGradIdx : 0);
@@ -1705,6 +2005,9 @@ const EditEventPanel = ({ event, onClose, onSaved, toast }) => {
         emoji: form.emoji,
         gradient: GRADIENTS[gradIdx],
         flyerURL,
+        venmo: form.venmo.replace('@','').trim()||null,
+        cashapp: form.cashapp.replace('$','').trim()||null,
+        paypal: form.paypal.trim()||null,
       };
       await updateEvent(event.id, updates);
       onSaved(updates);
@@ -1770,7 +2073,22 @@ const EditEventPanel = ({ event, onClose, onSaved, toast }) => {
         </div>
 
         <label className="input-label">About this Event</label>
-        <textarea className="input-field" value={form.description} onChange={set('description')} placeholder="What's this event about? Who should come? What to expect..." rows={4} style={{ lineHeight:1.55,marginBottom:24 }}/>
+        <textarea className="input-field" value={form.description} onChange={set('description')} placeholder="What's this event about? Who should come? What to expect..." rows={4} style={{ lineHeight:1.55,marginBottom:20 }}/>
+
+        <label className="input-label">💸 Payment Links <span style={{ fontWeight:400,color:'rgba(255,255,255,0.35)' }}>(optional)</span></label>
+        <p style={{ fontSize:12,color:'rgba(255,255,255,0.35)',marginBottom:10 }}>Guests see these to pay for tickets or cover.</p>
+        <div style={{ display:'flex',alignItems:'center',gap:10,marginBottom:10 }}>
+          <span style={{ fontSize:18,width:24,textAlign:'center' }}>💜</span>
+          <input className="input-field" value={form.venmo} onChange={set('venmo')} placeholder="Venmo @handle" style={{ flex:1 }}/>
+        </div>
+        <div style={{ display:'flex',alignItems:'center',gap:10,marginBottom:10 }}>
+          <span style={{ fontSize:18,width:24,textAlign:'center' }}>💚</span>
+          <input className="input-field" value={form.cashapp} onChange={set('cashapp')} placeholder="Cash App $cashtag" style={{ flex:1 }}/>
+        </div>
+        <div style={{ display:'flex',alignItems:'center',gap:10,marginBottom:24 }}>
+          <span style={{ fontSize:18,width:24,textAlign:'center' }}>🔵</span>
+          <input className="input-field" value={form.paypal} onChange={set('paypal')} placeholder="PayPal.me/username" style={{ flex:1 }}/>
+        </div>
 
         <button onClick={save} disabled={loading} className="btn-primary" style={{ width:'100%',padding:16,borderRadius:16,fontSize:17,border:'none',display:'flex',alignItems:'center',justifyContent:'center',gap:10 }}>
           {loading?<><Spinner size={20}/> Saving...</>:'Save Changes ✓'}
@@ -1781,7 +2099,7 @@ const EditEventPanel = ({ event, onClose, onSaved, toast }) => {
 };
 
 const CreateScreen = ({ currentUser, onBack, onCreated }) => {
-  const [form, setForm] = useState({ name:'',location:'',date:'',time:'',privacy:'invite',description:'',emoji:'🔥' });
+  const [form, setForm] = useState({ name:'',location:'',date:'',time:'',privacy:'invite',description:'',emoji:'🔥',venmo:'',cashapp:'',paypal:'' });
   const [flyerFile, setFlyerFile] = useState(null);
   const [flyerPreview, setFlyerPreview] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -1818,6 +2136,10 @@ const CreateScreen = ({ currentUser, onBack, onCreated }) => {
         checkedInCount: 0,
         total: 0,
         flyerURL,
+        venmo: form.venmo.replace('@','').trim()||null,
+        cashapp: form.cashapp.replace('$','').trim()||null,
+        paypal: form.paypal.trim()||null,
+        coHostIds: [],
       });
       setDone(true);
     } catch(e) {
@@ -1910,6 +2232,21 @@ const CreateScreen = ({ currentUser, onBack, onCreated }) => {
 
         <label className="input-label">Description</label>
         <textarea className="input-field" value={form.description} onChange={set('description')} placeholder="What's this event about?" rows={3} style={{ lineHeight:1.55,marginBottom:20 }}/>
+
+        <label className="input-label">💸 Payment Links <span style={{ fontWeight:400,color:'rgba(255,255,255,0.35)' }}>(optional)</span></label>
+        <p style={{ fontSize:12,color:'rgba(255,255,255,0.35)',marginBottom:10 }}>Add your payment handles so guests can pay for tickets or cover.</p>
+        <div style={{ display:'flex',alignItems:'center',gap:10,marginBottom:10 }}>
+          <span style={{ fontSize:18,width:24,textAlign:'center' }}>💜</span>
+          <input className="input-field" value={form.venmo} onChange={set('venmo')} placeholder="Venmo @handle" style={{ flex:1 }}/>
+        </div>
+        <div style={{ display:'flex',alignItems:'center',gap:10,marginBottom:10 }}>
+          <span style={{ fontSize:18,width:24,textAlign:'center' }}>💚</span>
+          <input className="input-field" value={form.cashapp} onChange={set('cashapp')} placeholder="Cash App $cashtag" style={{ flex:1 }}/>
+        </div>
+        <div style={{ display:'flex',alignItems:'center',gap:10,marginBottom:24 }}>
+          <span style={{ fontSize:18,width:24,textAlign:'center' }}>🔵</span>
+          <input className="input-field" value={form.paypal} onChange={set('paypal')} placeholder="PayPal.me/username" style={{ flex:1 }}/>
+        </div>
 
         <button onClick={submit} disabled={loading} className={form.name.trim()?"btn-primary":""} style={{ width:'100%',padding:16,borderRadius:16,fontSize:17,border:'none',background:form.name.trim()?undefined:'rgba(255,255,255,0.08)',color:form.name.trim()?'#fff':'rgba(255,255,255,0.3)',cursor:form.name.trim()?'pointer':'default',display:'flex',alignItems:'center',justifyContent:'center',gap:10 }}>
           {loading?<><Spinner size={20}/> Creating...</>:'Create Event 🎉'}
@@ -2653,7 +2990,7 @@ const App = () => {
         {!activeEvent && !activeDm && screen!=='create' && !editingProfile && (
           <>
             <div className="screen-scroll">
-              {screen==='home'     && <HomeScreen user={currentUser} onOpenEvent={setActiveEvent} onCreateEvent={()=>setScreen('create')} onProfile={()=>setScreen('profile')}/>}
+              {screen==='home'     && <HomeScreen user={currentUser} currentUser={currentUser} onOpenEvent={ev=>{ if(typeof ev==='string'){ db.collection('events').doc(ev).get().then(d=>{ if(d.exists) setActiveEvent({id:d.id,...d.data()}); }); } else setActiveEvent(ev); }} onCreateEvent={()=>setScreen('create')} onProfile={()=>setScreen('profile')}/>}
               {screen==='explore'  && <ExploreScreen currentUser={currentUser} onDm={setActiveDm} onViewProfile={viewProfile}/>}
               {screen==='messages' && <MessagesScreen currentUser={currentUser} onDm={setActiveDm} onViewProfile={viewProfile}/>}
               {screen==='profile'  && <ProfileScreen currentUser={currentUser} onDm={setActiveDm} onEditProfile={()=>setEditingProfile(true)}/>}
